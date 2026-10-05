@@ -487,6 +487,11 @@ struct tr_torrent
         return metainfo_.file_size(i);
     }
 
+    [[nodiscard]] std::string_view webseed_subpath(tr_file_index_t i) const
+    {
+        return metainfo_.webseed_subpath(i);
+    }
+
     void set_file_subpath(tr_file_index_t i, std::string_view subpath)
     {
         metainfo_.set_file_subpath(i, subpath);
