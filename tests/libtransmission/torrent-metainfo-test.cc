@@ -268,4 +268,59 @@ TEST_F(TorrentMetainfoTest, utf8Test)
     EXPECT_EQ("bad-utf8-path/file\uFFFD.foo", tm.file_subpath(1));
 }
 
+// Webseeds serve files under the metainfo's names, not the sanitized local ones
+TEST_F(TorrentMetainfoTest, webseedSubpathIsUnsanitized)
+{
+    struct LocalTest
+    {
+        std::string_view benc;
+        std::array<std::string_view, 2> file_subpaths;
+        std::array<std::string_view, 2> webseed_subpaths;
+    };
+
+    static auto constexpr Tests = std::array<LocalTest, 3U>{ {
+        // sanitized file name
+        { "d4:infod5:filesld6:lengthi1e4:pathl7:a\tb.txteed6:lengthi1e4:pathl5:c.txteee"
+                  "4:name5:hello12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"sv,
+          { "hello/a_b.txt"sv, "hello/c.txt"sv },
+          { "hello/a\tb.txt"sv, "hello/c.txt"sv } },
+        // sanitized folder name
+        { "d4:infod5:filesld6:lengthi1e4:pathl5:a.txteed6:lengthi1e4:pathl5:c.txteee"
+                  "4:name6:he\tllo12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"sv,
+          { "he_llo/a.txt"sv, "he_llo/c.txt"sv },
+          { "he\tllo/a.txt"sv, "he\tllo/c.txt"sv } },
+        // sanitized single-file name
+        { "d4:infod6:lengthi1e4:name7:a\tb.txt12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"sv,
+          { "a_b.txt"sv },
+          { "a\tb.txt"sv } },
+    } };
+
+    for (auto const& [benc, file_subpaths, webseed_subpaths] : Tests)
+    {
+        auto tm = tr_torrent_metainfo{};
+        EXPECT_TRUE(tm.parse_benc(benc));
+        for (tr_file_index_t i = 0; i < tm.file_count(); ++i)
+        {
+            EXPECT_EQ(file_subpaths[i], tm.file_subpath(i));
+            EXPECT_EQ(webseed_subpaths[i], tm.webseed_subpath(i));
+        }
+    }
+}
+
+TEST_F(TorrentMetainfoTest, webseedSubpathIgnoresRenames)
+{
+    static auto constexpr Benc =
+        "d4:infod5:filesld6:lengthi1e4:pathl5:a.txteed6:lengthi1e4:pathl5:c.txteee"
+        "4:name5:hello12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"sv;
+
+    auto tm = tr_torrent_metainfo{};
+    EXPECT_TRUE(tm.parse_benc(Benc));
+
+    tm.set_file_subpath(1, "hello/renamed.txt"sv);
+    tm.set_file_subpath(1, "renamed/again.txt"sv);
+    EXPECT_EQ("renamed/again.txt"sv, tm.file_subpath(1));
+    EXPECT_EQ("hello/c.txt"sv, tm.webseed_subpath(1));
+    EXPECT_EQ("hello/a.txt"sv, tm.webseed_subpath(0));
+}
+
 } // namespace libtransmission::test

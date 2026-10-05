@@ -7,6 +7,7 @@
 
 #include <cstdint> // uint32_t, uint64_t
 #include <ctime>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,8 +61,26 @@ public:
         return files().path(i);
     }
 
+    // The file's path as the metainfo names it, before sanitizing or renaming.
+    // Webseeds serve the file under this path.
+    [[nodiscard]] std::string_view webseed_subpath(tr_file_index_t i) const
+    {
+        if (auto const iter = webseed_subpaths_.find(i); iter != std::end(webseed_subpaths_))
+        {
+            return iter->second;
+        }
+
+        return file_subpath(i);
+    }
+
     void set_file_subpath(tr_file_index_t i, std::string_view subpath)
     {
+        if (file_subpath(i) != subpath)
+        {
+            // keeps the path from before the first rename
+            webseed_subpaths_.try_emplace(i, file_subpath(i));
+        }
+
         files_.set_path(i, subpath);
     }
 
@@ -224,6 +243,9 @@ private:
     tr_block_info block_info_ = tr_block_info{ 0, 0 };
 
     tr_torrent_files files_;
+
+    // webseed_subpath() for the files whose path differs from file_subpath()
+    std::map<tr_file_index_t, std::string> webseed_subpaths_;
 
     std::vector<tr_sha1_digest_t> pieces_;
 

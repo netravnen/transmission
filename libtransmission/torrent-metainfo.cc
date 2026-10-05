@@ -70,6 +70,10 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
     tr_pathbuf file_subpath_;
     int64_t file_length_ = 0;
 
+    // file_subpath_ before sanitizing, and every file whose path sanitizing changed
+    tr_pathbuf raw_subpath_;
+    std::vector<std::pair<tr_file_index_t, std::string>> raw_subpaths_;
+
     enum class State : uint8_t
     {
         UsePath,
@@ -154,6 +158,7 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
             }
 
             file_subpath_.clear();
+            raw_subpath_.clear();
         }
         else if (state_ == State::PieceLayers)
         {
@@ -169,12 +174,14 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
         {
             state_ = std::empty(tm_.files_) ? State::Files : State::FilesIgnored;
             file_subpath_.clear();
+            raw_subpath_.clear();
             file_length_ = 0;
         }
         else if (pathStartsWith(InfoKey, FilesKey, ArrayKey, PathUtf8Key))
         {
             // torrent has a utf8 path, drop the other one due to probable non-utf8 encoding
             file_subpath_.clear();
+            raw_subpath_.clear();
         }
 
         return BasicHandler::StartArray(context);
@@ -304,8 +311,14 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
                 {
                     file_subpath_ += '/';
                 }
+                if (!std::empty(raw_subpath_))
+                {
+                    raw_subpath_ += '/';
+                }
                 // BEP-3 says strings are UTF-8, so mask non-conformant path strings
-                tr_torrent_files::sanitize_subpath(tr_strv_convert_utf8(value), file_subpath_);
+                auto const element = tr_strv_convert_utf8(value);
+                tr_torrent_files::sanitize_subpath(element, file_subpath_);
+                raw_subpath_ += element;
             }
             else if (current_key == AttrKey)
             {
@@ -464,6 +477,10 @@ private:
         }
         else
         {
+            if (raw_subpath_.sv() != file_subpath_.sv())
+            {
+                raw_subpaths_.emplace_back(tm_.file_count(), raw_subpath_.sv());
+            }
             tm_.files_.add(file_subpath_, file_length_);
         }
 
@@ -502,6 +519,25 @@ private:
 
         auto root = tr_pathbuf{};
         tr_torrent_files::sanitize_subpath(tm_.name_, root);
+
+        // Keep the metainfo's path for each file whose name or folder sanitizing changed.
+        // Runs before the prefix is added, while files_ still holds the sanitized subpaths.
+        auto const join = [this](std::string_view subpath)
+        {
+            return std::empty(tm_.name_) ? std::string{ subpath } : fmt::format("{:s}/{:s}", tm_.name_, subpath);
+        };
+        for (auto const& [file_index, raw_subpath] : raw_subpaths_)
+        {
+            tm_.webseed_subpaths_.try_emplace(file_index, join(raw_subpath));
+        }
+        if (root.sv() != tm_.name_)
+        {
+            for (tr_file_index_t i = 0, n = tm_.file_count(); i < n; ++i)
+            {
+                tm_.webseed_subpaths_.try_emplace(i, join(tm_.file_subpath(i)));
+            }
+        }
+
         if (!std::empty(root))
         {
             tm_.files_.insert_subpath_prefix(root);
@@ -534,7 +570,12 @@ private:
         // In the single file case, 'length' maps to the length of the file in bytes."
         if (tm_.file_count() == 0 && length_ != 0 && !std::empty(tm_.name_))
         {
-            tm_.files_.add(tr_torrent_files::sanitize_subpath(tm_.name_), length_);
+            auto const subpath = tr_torrent_files::sanitize_subpath(tm_.name_);
+            if (subpath != tm_.name_)
+            {
+                tm_.webseed_subpaths_.try_emplace(0U, tm_.name_);
+            }
+            tm_.files_.add(subpath, length_);
         }
 
         if (auto const has_metainfo = tm_.info_dict_size() != 0U; has_metainfo)
