@@ -614,6 +614,20 @@ private:
                 return false;
             }
 
+            // Fixed here rather than in add_webseed() because fixing needs file_count(),
+            // and "httpseeds" sorts before "info" in a bencoded dict.
+            auto fixed_urls = std::vector<std::string>{};
+            fixed_urls.reserve(std::size(tm_.webseed_urls_));
+            for (auto const& url : tm_.webseed_urls_)
+            {
+                if (auto fixed = tr_torrent_metainfo::fix_webseed_url(tm_, url);
+                    std::find(std::begin(fixed_urls), std::end(fixed_urls), fixed) == std::end(fixed_urls))
+                {
+                    fixed_urls.emplace_back(std::move(fixed));
+                }
+            }
+            tm_.webseed_urls_ = std::move(fixed_urls);
+
             return true;
         }
 
