@@ -437,6 +437,13 @@ bool tr_urlIsValid(std::string_view url)
     return parsed && std::find(std::begin(Schemes), std::end(Schemes), parsed->scheme) != std::end(Schemes);
 }
 
+bool tr_urlIsValidWebseed(std::string_view url)
+{
+    auto constexpr Schemes = std::array<std::string_view, 3>{ "http"sv, "https"sv, "ftp"sv };
+    auto const parsed = tr_urlParse(url);
+    return parsed && std::find(std::begin(Schemes), std::end(Schemes), parsed->scheme) != std::end(Schemes);
+}
+
 std::string tr_urlTrackerLogName(std::string_view url)
 {
     if (auto const parsed = tr_urlParse(url); parsed)

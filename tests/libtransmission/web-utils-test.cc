@@ -243,6 +243,17 @@ TEST_F(WebUtilsTest, urlIsValid)
     EXPECT_FALSE(tr_urlIsValidTracker("sftp://www.example.com"sv)); // unsupported tracker scheme
 }
 
+TEST_F(WebUtilsTest, urlIsValidWebseed)
+{
+    EXPECT_TRUE(tr_urlIsValidWebseed("http://www.example.com/"sv));
+    EXPECT_TRUE(tr_urlIsValidWebseed("https://www.example.com/"sv));
+    EXPECT_TRUE(tr_urlIsValidWebseed("ftp://www.example.com/"sv));
+    EXPECT_FALSE(tr_urlIsValidWebseed("sftp://www.example.com/"sv));
+    EXPECT_FALSE(tr_urlIsValidWebseed("udp://www.example.com:6969/"sv));
+    EXPECT_FALSE(tr_urlIsValidWebseed("zzz://www.example.com/"sv));
+    EXPECT_FALSE(tr_urlIsValidWebseed("www.example.com"sv));
+}
+
 TEST_F(WebUtilsTest, urlPercentDecode)
 {
     auto constexpr Tests = std::array<std::pair<std::string_view, std::string_view>, 13>{ {
