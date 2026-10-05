@@ -1,7 +1,7 @@
 [submodule "third-party/dht"]
 	path = third-party/dht
 	url = https://code.netravnen.org/transmission/dht.git
-	branch = post-0.27-transmission
+	branch = post-0.28-transmission
 [submodule "third-party/libb64"]
 	path = third-party/libb64
 	url = https://github.com/transmission/libb64.git
