@@ -156,6 +156,22 @@ CURLcode ssl_context_func(CURL* /*curl*/, void* ssl_ctx, void* /*user_data*/)
     return CURLE_OK;
 }
 #endif
+
+// https://curl.se/libcurl/c/CURLINFO_RESPONSE_CODE.html
+// "The stored value will be zero if no server response code has been received"
+auto constexpr NoResponseCode = 0L;
+
+auto constexpr PartialContentResponseCode = 206L;
+
+// Whether the transfer uses HTTP after following any redirects.
+// Of the protocols curl can fetch a range over, only HTTP reports partial content with a status code.
+[[nodiscard]] bool is_http_transfer(CURL* const easy)
+{
+    char* url = nullptr;
+    (void)curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &url);
+    auto const parsed = url != nullptr ? tr_urlParse(url) : std::nullopt;
+    return !parsed || parsed->scheme == "http"sv || parsed->scheme == "https"sv;
+}
 } // namespace
 
 // ---
@@ -518,15 +534,10 @@ public:
 
         if (auto const range = task->range())
         {
-            // https://curl.se/libcurl/c/CURLINFO_RESPONSE_CODE.html
-            // "The stored value will be zero if no server response code has been received"
-            static auto constexpr NoResponseCode = 0L;
-            static auto constexpr PartialContentResponseCode = 206L;
-
             // Test for webservers that don't support partial-content, see GH #4595
             auto code = long{};
             (void)curl_easy_getinfo(task->easy(), CURLINFO_RESPONSE_CODE, &code);
-            if (code != NoResponseCode && code != PartialContentResponseCode)
+            if (code != NoResponseCode && code != PartialContentResponseCode && is_http_transfer(task->easy()))
             {
                 tr_logAddWarn(
                     fmt::format(
@@ -844,6 +855,11 @@ public:
                     curl_easy_getinfo(e, CURLINFO_REQUEST_SIZE, &req_bytes_sent);
                     curl_easy_getinfo(e, CURLINFO_TOTAL_TIME, &total_time);
                     curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &task->response.status);
+                    if (auto const& range = task->range(); range && msg->data.result == CURLE_OK &&
+                        std::size(task->response.body) == range->second + 1U - range->first && !is_http_transfer(e))
+                    {
+                        task->response.status = PartialContentResponseCode;
+                    }
                     curl_easy_getinfo(e, CURLINFO_PRIMARY_IP, &primary_ip);
                     task->response.did_connect = task->response.status > 0 || req_bytes_sent > 0;
                     task->response.did_timeout = task->response.status == 0 &&

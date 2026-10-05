@@ -23,7 +23,9 @@ public:
     // when a fetch() finishes.
     struct FetchResponse
     {
-        long status = 0; // http server response, e.g. 200
+        // http server response, e.g. 200.
+        // A ranged fetch over another protocol reports 206 if the whole range arrived.
+        long status = 0;
         std::string body;
         std::string primary_ip;
         bool did_connect = false;
