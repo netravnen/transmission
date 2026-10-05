@@ -138,26 +138,43 @@ TEST_F(IPCacheTest, bindAddr)
 
 TEST_F(IPCacheTest, setGlobalAddr)
 {
-    static auto constexpr AddrStr = std::array{
-        "8.8.8.8"sv, "192.168.133.133"sv, "172.16.241.133"sv, "2001:1890:1112:1::20"sv, "fd12:3456:789a:1::1"sv,
-    };
-    static auto constexpr AddrTests = std::array{ true, false, false, true, true };
-    static_assert(TR_AF_INET == 0);
-    static_assert(TR_AF_INET6 == 1);
-    static_assert(NUM_TR_AF_INET_TYPES == 2);
-    static_assert(std::size(AddrStr) == std::size(AddrTests));
+    static auto constexpr Tests = std::array<std::pair<std::string_view, bool>, 14>{ {
+        { "8.8.8.8"sv, true },
+        { "192.168.133.133"sv, false },
+        { "172.16.241.133"sv, false },
+        { "127.0.0.1"sv, false },
+        { "169.254.1.1"sv, false },
+        { "224.0.0.1"sv, false },
+        { "0.0.0.0"sv, false },
+        { "2001:1890:1112:1::20"sv, true },
+        { "fd12:3456:789a:1::1"sv, true },
+        { "::1"sv, false },
+        { "fe80::1"sv, false },
+        { "::ffff:8.8.8.8"sv, false },
+        { "ff02::1"sv, false },
+        { "::"sv, false },
+    } };
 
     auto mediator = MockMediator{};
     ip_cache_ = tr_ip_cache::create(mediator);
 
-    for (std::size_t i = 0; i < std::size(AddrStr); ++i)
+    // A rejected address must leave the last accepted one of its family cached.
+    auto expected_cached = std::array<std::optional<std::string_view>, NUM_TR_AF_INET_TYPES>{};
+    for (auto const& [presentation, accepted] : Tests)
     {
-        auto const addr = tr_address::from_string(AddrStr[i]);
+        auto const addr = tr_address::from_string(presentation);
         ASSERT_TRUE(addr.has_value());
-        EXPECT_EQ(ip_cache_->set_global_addr(*addr), AddrTests[i]) << AddrStr[i];
-        if (auto const val = ip_cache_->global_addr(addr->type); val && AddrTests[i])
+        EXPECT_EQ(accepted, ip_cache_->set_global_addr(*addr)) << presentation;
+        if (accepted)
         {
-            EXPECT_EQ(val->display_name(), AddrStr[i]);
+            expected_cached[addr->type] = presentation;
+        }
+
+        auto const cached = ip_cache_->global_addr(addr->type);
+        ASSERT_EQ(expected_cached[addr->type].has_value(), cached.has_value()) << presentation;
+        if (cached)
+        {
+            EXPECT_EQ(*expected_cached[addr->type], cached->display_name()) << presentation;
         }
     }
 }

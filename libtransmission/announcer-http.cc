@@ -430,10 +430,27 @@ void tr_announcerParseHttpAnnounceResponse(tr_announce_response& response, std::
             {
                 // unused
             }
-            else if (pathIs("external ip"sv) && std::size(value) == 4)
+            else if (pathIs("external ip"sv))
             {
-                auto const [addr, out] = tr_address::from_compact_ipv4(reinterpret_cast<std::byte const*>(std::data(value)));
-                response_.external_ip = addr;
+                // https://www.bittorrent.org/beps/bep_0024.html
+                // A compact IPv4 (4 bytes) or IPv6 (16 bytes) address.
+                auto const* const bytes = reinterpret_cast<std::byte const*>(std::data(value));
+                switch (std::size(value))
+                {
+                case tr_address::CompactAddrBytes[TR_AF_INET]:
+                    response_.external_ip = tr_address::from_compact_ipv4(bytes).first;
+                    break;
+                case tr_address::CompactAddrBytes[TR_AF_INET6]:
+                    {
+                        // A tracker on a dual-stack socket sees an IPv4 client as ::ffff:a.b.c.d.
+                        auto const addr = tr_address::from_compact_ipv6(bytes).first;
+                        response_.external_ip = addr.from_ipv4_mapped().value_or(addr);
+                    }
+                    break;
+                default:
+                    tr_logAddDebug(fmt::format("ignoring {}-byte external ip", std::size(value)), log_name_);
+                    break;
+                }
             }
             else
             {
