@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstddef> // std::byte
 #include <optional>
+#include <string>
 #include <string_view>
 
 #define LIBTRANSMISSION_ANNOUNCER_MODULE
@@ -53,6 +54,73 @@ TEST_F(AnnouncerTest, parseHttpAnnounceResponseNoPeers)
     EXPECT_EQ(0U, std::size(response.pex6));
     EXPECT_EQ(""sv, response.errmsg);
     EXPECT_EQ(""sv, response.warning);
+}
+
+TEST_F(AnnouncerTest, parseHttpAnnounceResponseExternalIpv4)
+{
+    // clang-format off
+    auto constexpr Benc =
+        "d"
+            "8:interval" "i1803e"
+            "11:external ip" "4:" "\x5d\xb8\xd8\x22"
+        "e"sv;
+    // clang-format on
+
+    auto response = tr_announce_response{};
+    tr_announcerParseHttpAnnounceResponse(response, Benc, LogName);
+    EXPECT_EQ(1803, response.interval);
+    ASSERT_TRUE(response.external_ip.has_value());
+    EXPECT_TRUE(response.external_ip->is_ipv4());
+    EXPECT_EQ("93.184.216.34"sv, response.external_ip->display_name());
+}
+
+TEST_F(AnnouncerTest, parseHttpAnnounceResponseExternalIpv6)
+{
+    // clang-format off
+    auto constexpr Benc =
+        "d"
+            "8:interval" "i1803e"
+            "11:external ip" "16:" "\x20\x01\x18\x90\x11\x12\x00\x01\x00\x00\x00\x00\x00\x00\x00\x20"
+        "e"sv;
+    // clang-format on
+
+    auto response = tr_announce_response{};
+    tr_announcerParseHttpAnnounceResponse(response, Benc, LogName);
+    EXPECT_EQ(1803, response.interval);
+    ASSERT_TRUE(response.external_ip.has_value());
+    EXPECT_TRUE(response.external_ip->is_ipv6());
+    EXPECT_EQ("2001:1890:1112:1::20"sv, response.external_ip->display_name());
+}
+
+TEST_F(AnnouncerTest, parseHttpAnnounceResponseExternalIpv4Mapped)
+{
+    // clang-format off
+    auto constexpr Benc =
+        "d"
+            "8:interval" "i1803e"
+            "11:external ip" "16:" "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x5d\xb8\xd8\x22"
+        "e"sv;
+    // clang-format on
+
+    auto response = tr_announce_response{};
+    tr_announcerParseHttpAnnounceResponse(response, Benc, LogName);
+    EXPECT_EQ(1803, response.interval);
+    ASSERT_TRUE(response.external_ip.has_value());
+    EXPECT_TRUE(response.external_ip->is_ipv4());
+    EXPECT_EQ("93.184.216.34"sv, response.external_ip->display_name());
+}
+
+TEST_F(AnnouncerTest, parseHttpAnnounceResponseExternalIpInvalidLength)
+{
+    for (auto const len : { 0U, 3U, 5U, 15U, 17U })
+    {
+        auto const benc = "d8:intervali1803e11:external ip"s + std::to_string(len) + ':' + std::string(len, '\x01') + 'e';
+
+        auto response = tr_announce_response{};
+        tr_announcerParseHttpAnnounceResponse(response, benc, LogName);
+        EXPECT_EQ(1803, response.interval) << len;
+        EXPECT_FALSE(response.external_ip.has_value()) << len;
+    }
 }
 
 TEST_F(AnnouncerTest, parseHttpAnnounceResponsePexCompact)

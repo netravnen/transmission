@@ -142,7 +142,7 @@ struct tr_announce_response
      * if this is provided, subsequent http announces must include this. */
     std::string tracker_id;
 
-    /* tracker extension that returns the client's public IP address.
+    /* tracker extension that returns the client's public IPv4 or IPv6 address.
      * https://www.bittorrent.org/beps/bep_0024.html */
     std::optional<tr_address> external_ip;
 

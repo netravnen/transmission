@@ -206,7 +206,8 @@ tr_address tr_ip_cache::bind_addr(tr_address_type type) const noexcept
 
 bool tr_ip_cache::set_global_addr(tr_address const& addr_new) noexcept
 {
-    if (addr_new.is_global_unicast())
+    // An IPv4-mapped IPv6 address names an IPv4 host, so it is never our global IPv6 address.
+    if (addr_new.is_global_unicast() && !addr_new.is_ipv6_ipv4_mapped())
     {
         auto const lock = std::scoped_lock{ global_addr_mutex_[addr_new.type] };
         if (auto& addr = global_addr_[addr_new.type]; addr != addr_new)
