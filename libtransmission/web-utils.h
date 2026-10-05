@@ -25,6 +25,9 @@ bool tr_urlIsValidTracker(std::string_view url);
 /** @brief return true if the url is a [ http, https, ftp, sftp ] url that Transmission understands */
 bool tr_urlIsValid(std::string_view url);
 
+/** @brief return true if the url is a [ http, https, ftp ] url that Transmission can fetch webseed data from */
+bool tr_urlIsValidWebseed(std::string_view url);
+
 struct tr_url_parsed_t
 {
     // http://example.com:80/over/there?name=ferret#nose

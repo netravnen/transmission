@@ -200,7 +200,7 @@ void tr_magnet_metainfo::set_name(std::string_view name)
 
 void tr_magnet_metainfo::add_webseed(std::string_view webseed)
 {
-    if (!tr_urlIsValid(webseed))
+    if (!tr_urlIsValidWebseed(webseed))
     {
         return;
     }
@@ -250,7 +250,7 @@ bool tr_magnet_metainfo::parseMagnet(std::string_view magnet_link, tr_error* err
         {
             auto const url = tr_urlPercentDecode(value);
             auto const url_sv = tr_strv_strip(url);
-            if (tr_urlIsValid(url_sv))
+            if (tr_urlIsValidWebseed(url_sv))
             {
                 this->webseed_urls_.emplace_back(url_sv);
             }
