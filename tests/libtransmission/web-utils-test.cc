@@ -317,3 +317,22 @@ TEST_F(WebUtilsTest, urlPercentEncode)
         EXPECT_EQ(encoded, buf);
     }
 }
+
+TEST_F(WebUtilsTest, urlPercentEncodePath)
+{
+    static auto constexpr Tests = std::array<std::pair<std::string_view, std::string_view>, 6U>{ {
+        { "hello/world.txt"sv, "hello/world.txt"sv },
+        { "hello/Track #1.flac"sv, "hello/Track%20%231.flac"sv },
+        { "hello/what?.txt"sv, "hello/what%3F.txt"sv },
+        { "hello/100%.txt"sv, "hello/100%25.txt"sv },
+        { "a&b;c/d=e+f"sv, "a%26b%3Bc/d%3De%2Bf"sv },
+        { "Letöltések/a.txt"sv, "Let%C3%B6lt%C3%A9sek/a.txt"sv },
+    } };
+
+    for (auto const& [decoded, encoded] : Tests)
+    {
+        auto buf = tr_urlbuf{};
+        tr_urlPercentEncodePath(std::back_inserter(buf), decoded);
+        EXPECT_EQ(encoded, buf);
+    }
+}

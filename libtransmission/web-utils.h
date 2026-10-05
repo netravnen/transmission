@@ -87,6 +87,25 @@ constexpr void tr_urlPercentEncode(BackInsertIter out, std::string_view input, b
     }
 }
 
+// Percent-encodes every character of a '/'-separated path except the separators.
+// Use this for raw file paths, where '%', '?' and '#' are literal characters.
+template<typename BackInsertIter>
+constexpr void tr_urlPercentEncodePath(BackInsertIter out, std::string_view path)
+{
+    for (;;)
+    {
+        auto const pos = path.find('/');
+        tr_urlPercentEncode(out, path.substr(0, pos));
+        if (pos == std::string_view::npos)
+        {
+            return;
+        }
+
+        out = '/';
+        path.remove_prefix(pos + 1U);
+    }
+}
+
 template<typename BackInsertIter>
 constexpr void tr_urlPercentEncode(BackInsertIter out, tr_sha1_digest_t const& digest)
 {
