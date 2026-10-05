@@ -211,6 +211,41 @@ TEST_F(TorrentMetainfoTest, GetRightStyleWebseedString)
     EXPECT_EQ("http://www.webseed-one.com/"sv, tm.webseed(0));
 }
 
+// BEP 19: a multi-file url-list entry names a directory, so it must end in '/'
+TEST_F(TorrentMetainfoTest, GetRightStyleWebseedMultiFileAddsTrailingSlash)
+{
+    static auto constexpr Benc =
+        "d"
+        "9:httpseedsl26:http://www.webseed-one.come"
+        "4:infod"
+        "5:filesld6:lengthi1e4:pathl1:aeed6:lengthi1e4:pathl1:beee"
+        "4:name5:hello12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaa"
+        "e"
+        "8:url-listl26:http://www.webseed-one.com23:http://webseed-two.com/22:http://webseed-two.come"
+        "e"sv;
+
+    auto tm = tr_torrent_metainfo{};
+    EXPECT_TRUE(tm.parse_benc(Benc));
+    EXPECT_EQ(size_t{ 2 }, tm.webseed_count());
+    EXPECT_EQ("http://www.webseed-one.com/"sv, tm.webseed(0));
+    EXPECT_EQ("http://webseed-two.com/"sv, tm.webseed(1));
+}
+
+// BEP 19: a single-file url-list entry may be the file's full URL
+TEST_F(TorrentMetainfoTest, GetRightStyleWebseedSingleFileKeepsUrl)
+{
+    static auto constexpr Benc =
+        "d"
+        "4:infod6:lengthi1e4:name5:hello12:piece lengthi262144e6:pieces20:aaaaaaaaaaaaaaaaaaaae"
+        "8:url-list30:http://www.webseed-one.com/abc"
+        "e"sv;
+
+    auto tm = tr_torrent_metainfo{};
+    EXPECT_TRUE(tm.parse_benc(Benc));
+    EXPECT_EQ(size_t{ 1 }, tm.webseed_count());
+    EXPECT_EQ("http://www.webseed-one.com/abc"sv, tm.webseed(0));
+}
+
 TEST_F(TorrentMetainfoTest, piecesKeyTest)
 {
     static auto constexpr BadTorrents = std::array<std::pair<std::string_view, std::string_view>, 7U>{ {
