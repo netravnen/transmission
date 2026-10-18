@@ -97,6 +97,8 @@ TEST_F(TorrentMagnetTest, setMetadataPiece)
 
 TEST_F(TorrentMagnetTest, setMetadataPieceKeepsWebseeds)
 {
+    tr_sessionSetKeepMagnetWebseedsEnabled(session_, true);
+
     static auto constexpr Magnet =
         "magnet:?xt=urn:btih:fa5794674a18241bec985ddc3390e3cb171345e4"
         "&ws=http%3A%2F%2Fwww.example.com%2Fpath%2F"sv;
@@ -129,6 +131,43 @@ TEST_F(TorrentMagnetTest, setMetadataPieceKeepsWebseeds)
     ASSERT_TRUE(saved.parse_torrent_file(tor->torrent_file(), nullptr, &error)) << error.message();
     ASSERT_EQ(1U, saved.webseed_count());
     EXPECT_EQ(Webseed, saved.webseed(0));
+}
+
+TEST_F(TorrentMagnetTest, setMetadataPieceDropsWebseedsByDefault)
+{
+    // The default keeps the old behaviour: the ws= webseeds are dropped once
+    // the metadata arrives.
+    EXPECT_FALSE(tr_sessionIsKeepMagnetWebseedsEnabled(session_));
+
+    static auto constexpr Magnet =
+        "magnet:?xt=urn:btih:fa5794674a18241bec985ddc3390e3cb171345e4"
+        "&ws=http%3A%2F%2Fwww.example.com%2Fpath%2F"sv;
+
+    auto* const ctor = tr_ctorNew(session_);
+    EXPECT_TRUE(ctor->set_metainfo_from_magnet_link(Magnet));
+    tr_ctorSetPaused(ctor, TR_FORCE, true);
+    auto* const tor = tr_torrentNew(ctor, nullptr);
+    tr_ctorFree(ctor);
+    ASSERT_NE(nullptr, tor);
+    EXPECT_FALSE(tor->has_metainfo());
+    EXPECT_EQ(1U, tor->webseed_count());
+
+    auto const metainfo_benc = tr_base64_decode(InfoDictBase64);
+    auto const metainfo_size = std::size(metainfo_benc);
+    session_->run_in_session_thread(
+        [&]()
+        {
+            tor->maybe_start_metadata_transfer(metainfo_size);
+            tor->set_metadata_piece(0, std::data(metainfo_benc), metainfo_size);
+        });
+    ASSERT_TRUE(waitFor([tor] { return tor->has_metainfo(); }, 5s));
+
+    EXPECT_EQ(0U, tor->webseed_count());
+
+    auto saved = tr_torrent_metainfo{};
+    auto error = tr_error{};
+    ASSERT_TRUE(saved.parse_torrent_file(tor->torrent_file(), nullptr, &error)) << error.message();
+    EXPECT_EQ(0U, saved.webseed_count());
 }
 
 } // namespace tr::test

@@ -1003,6 +1003,11 @@ public:
         return settings().is_incomplete_file_naming_enabled;
     }
 
+    [[nodiscard]] constexpr auto isKeepMagnetWebseedsEnabled() const noexcept
+    {
+        return settings().keep_magnet_webseeds;
+    }
+
     [[nodiscard]] constexpr auto isPortRandom() const noexcept
     {
         return settings().peer_port_random_on_start;
@@ -1150,6 +1155,7 @@ private:
     friend void tr_sessionSetIdleLimit(tr_session* session, uint16_t idle_minutes);
     friend void tr_sessionSetIdleLimited(tr_session* session, bool is_limited);
     friend void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
+    friend void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetLPDEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetPaused(tr_session* session, bool is_paused);
     friend void tr_sessionSetPeerLimit(tr_session* session, uint16_t max_global_peers);

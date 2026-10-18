@@ -1022,6 +1022,20 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session)
     return session->isIncompleteFileNamingEnabled();
 }
 
+void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled)
+{
+    TR_ASSERT(session != nullptr);
+
+    session->settings_.keep_magnet_webseeds = enabled;
+}
+
+bool tr_sessionIsKeepMagnetWebseedsEnabled(tr_session const* session)
+{
+    TR_ASSERT(session != nullptr);
+
+    return session->isKeepMagnetWebseedsEnabled();
+}
+
 // ---
 
 void tr_sessionSetIncompleteDir(tr_session* session, std::string_view const dir)
