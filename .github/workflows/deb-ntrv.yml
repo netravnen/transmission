@@ -139,7 +139,9 @@ jobs:
           D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
           T="$D/obj-x86_64-linux-gnu/tests/libtransmission/libtransmission-test"
           test -x "$T"
-          su builder -c "'$T' --gtest_filter='TorrentMagnetTest.*'" 2>&1 | tee "$GITHUB_WORKSPACE/new-tests.log"
+          # The fixtures put their sandbox in $TMPDIR, else the current
+          # directory, so run from the builder-owned build tree as ctest does.
+          su builder -c "cd '$D/obj-x86_64-linux-gnu' && TMPDIR=/tmp '$T' --gtest_filter='TorrentMagnetTest.*'"             2>&1 | tee "$GITHUB_WORKSPACE/new-tests.log"
           grep -F '[       OK ] TorrentMagnetTest.setMetadataPieceKeepsWebseeds' "$GITHUB_WORKSPACE/new-tests.log"
           grep -F '[       OK ] TorrentMagnetTest.getMetadataPieceAfterTrackerEdit' "$GITHUB_WORKSPACE/new-tests.log"
           grep -F '[  PASSED  ] 4 tests' "$GITHUB_WORKSPACE/new-tests.log"
