@@ -432,6 +432,7 @@ public:
         bool port_forwarding_enabled = true;
         bool queue_stalled_enabled = true;
         bool ratio_limit_enabled = false;
+        bool relocate_info_dict_after_tracker_edit = false;
         bool script_torrent_added_enabled = false;
         bool script_torrent_done_enabled = false;
         bool script_torrent_done_seeding_enabled = false;
@@ -525,6 +526,7 @@ public:
             Field<&Settings::queue_stalled_minutes>{ TR_KEY_queue_stalled_minutes },
             Field<&Settings::ratio_limit>{ TR_KEY_ratio_limit },
             Field<&Settings::ratio_limit_enabled>{ TR_KEY_ratio_limit_enabled },
+            Field<&Settings::relocate_info_dict_after_tracker_edit>{ TR_KEY_relocate_info_dict_after_tracker_edit },
             Field<&Settings::is_incomplete_file_naming_enabled>{ TR_KEY_rename_partial_files },
             Field<&Settings::reqq>{ TR_KEY_reqq },
             Field<&Settings::should_scrape_paused_torrents>{ TR_KEY_scrape_paused_torrents_enabled },
@@ -1130,6 +1132,11 @@ public:
         return settings().is_incomplete_file_naming_enabled;
     }
 
+    [[nodiscard]] constexpr auto isRelocateInfoDictEnabled() const noexcept
+    {
+        return settings().relocate_info_dict_after_tracker_edit;
+    }
+
     [[nodiscard]] constexpr auto isPortRandom() const noexcept
     {
         return settings().peer_port_random_on_start;
@@ -1293,6 +1300,7 @@ private:
     friend void tr_sessionSetRPCUsername(tr_session* session, char const* username);
     friend void tr_sessionSetRatioLimit(tr_session* session, double desired_ratio);
     friend void tr_sessionSetRatioLimited(tr_session* session, bool is_limited);
+    friend void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetUTPEnabled(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeed(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeedTime(tr_session* session, bool enabled);

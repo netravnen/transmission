@@ -1015,6 +1015,20 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session)
     return session->isIncompleteFileNamingEnabled();
 }
 
+void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled)
+{
+    TR_ASSERT(session != nullptr);
+
+    session->settings_.relocate_info_dict_after_tracker_edit = enabled;
+}
+
+bool tr_sessionIsRelocateInfoDictEnabled(tr_session const* session)
+{
+    TR_ASSERT(session != nullptr);
+
+    return session->isRelocateInfoDictEnabled();
+}
+
 // ---
 
 void tr_sessionSetIncompleteDir(tr_session* session, char const* dir)
