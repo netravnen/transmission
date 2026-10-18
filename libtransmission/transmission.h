@@ -315,6 +315,16 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session);
  */
 void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
 
+/**
+ * @brief Keep the webseeds from a magnet link's ws= parameter when its
+ *        metadata finishes downloading. Off by default.
+ * @see `tr_sessionIsKeepMagnetWebseedsEnabled()`
+ */
+void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled);
+
+/** @see `tr_sessionSetKeepMagnetWebseedsEnabled()` */
+bool tr_sessionIsKeepMagnetWebseedsEnabled(tr_session const* session);
+
 /** @brief Get whether or not RPC calls are allowed in this session.
     @see `tr_sessionInit()`
     @see `tr_sessionSetRPCEnabled()` */

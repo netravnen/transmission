@@ -426,6 +426,7 @@ public:
         bool idle_seeding_limit_enabled = false;
         bool incomplete_dir_enabled = false;
         bool is_incomplete_file_naming_enabled = true;
+        bool keep_magnet_webseeds = false;
         bool lpd_enabled = true;
         bool peer_port_random_on_start = false;
         bool pex_enabled = true;
@@ -506,6 +507,7 @@ public:
             Field<&Settings::idle_seeding_limit_enabled>{ TR_KEY_idle_seeding_limit_enabled },
             Field<&Settings::incomplete_dir>{ TR_KEY_incomplete_dir },
             Field<&Settings::incomplete_dir_enabled>{ TR_KEY_incomplete_dir_enabled },
+            Field<&Settings::keep_magnet_webseeds>{ TR_KEY_keep_magnet_webseeds },
             Field<&Settings::lpd_enabled>{ TR_KEY_lpd_enabled },
             Field<&Settings::log_level>{ TR_KEY_message_level },
             Field<&Settings::peer_congestion_algorithm>{ TR_KEY_peer_congestion_algorithm },
@@ -1130,6 +1132,11 @@ public:
         return settings().is_incomplete_file_naming_enabled;
     }
 
+    [[nodiscard]] constexpr auto isKeepMagnetWebseedsEnabled() const noexcept
+    {
+        return settings().keep_magnet_webseeds;
+    }
+
     [[nodiscard]] constexpr auto isPortRandom() const noexcept
     {
         return settings().peer_port_random_on_start;
@@ -1273,6 +1280,7 @@ private:
     friend void tr_sessionSetIdleLimit(tr_session* session, uint16_t idle_minutes);
     friend void tr_sessionSetIdleLimited(tr_session* session, bool is_limited);
     friend void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
+    friend void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetLPDEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetPaused(tr_session* session, bool is_paused);
     friend void tr_sessionSetPeerLimit(tr_session* session, uint16_t max_global_peers);

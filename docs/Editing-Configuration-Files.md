@@ -72,6 +72,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
  * **download_dir:** String (default = [default locations](Configuration-Files.md#Locations))
  * **incomplete_dir:** String (default = [default locations](Configuration-Files.md#Locations)) Directory to keep files in until torrent is complete.
  * **incomplete_dir_enabled:** Boolean (default = false) When enabled, new torrents will download the files to `incomplete_dir`. When complete, the files will be moved to `download_dir`.
+ * **keep_magnet_webseeds:** Boolean (default = false) Keep the webseeds from a magnet link's `ws=` parameter when the torrent's metadata finishes downloading, in the saved `.torrent` file and in the torrent's webseed list. When false, the webseeds are dropped at that point.
  * **preallocation:** Number (0 = Off, 1 = Fast, 2 = Full (slower but reduces disk fragmentation), default = 1)
  * **rename_partial_files:** Boolean (default = true) Postfix partially downloaded files with ".part".
  * **start_added_torrents:** Boolean (default = true) Start torrents as soon as they are added.

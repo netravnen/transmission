@@ -272,6 +272,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "is_uploading_to"sv, // rpc
     "is_utp"sv, // rpc
     "jsonrpc"sv, // json-rpc
+    "keep_magnet_webseeds"sv, // tr_session::Settings
     "labels"sv, // .resume, rpc
     "lastAnnouncePeerCount"sv, // rpc
     "lastAnnounceResult"sv, // rpc

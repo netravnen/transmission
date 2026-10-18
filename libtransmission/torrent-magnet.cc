@@ -148,7 +148,7 @@ namespace
 {
 namespace set_metadata_piece_helpers
 {
-tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
+tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm, bool const keep_webseeds)
 {
     auto top = tr_variant::Map{ 8U };
 
@@ -177,7 +177,8 @@ tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
         announce_list.add_to_map(top);
     }
 
-    if (auto const n_webseeds = tm.webseed_count(); n_webseeds > 0U)
+    // Off by default: see keep_magnet_webseeds.
+    if (auto const n_webseeds = tm.webseed_count(); keep_webseeds && n_webseeds > 0U)
     {
         auto webseed_vec = tr_variant::Vector{};
         webseed_vec.reserve(n_webseeds);
@@ -221,7 +222,7 @@ tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
     }
 
     // yay we have an info dict. Let's make a torrent file
-    auto top_var = build_metainfo_except_info_dict(metainfo());
+    auto top_var = build_metainfo_except_info_dict(metainfo(), session->isKeepMagnetWebseedsEnabled());
     tr_variantMergeDicts(tr_variantDictAddDict(&top_var, TR_KEY_info, 0), &*info_dict_v);
     auto const benc = serde.to_string(top_var);
 
