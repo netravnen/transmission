@@ -36,6 +36,11 @@ public:
     // load multiple files.
     bool parse_torrent_file(std::string_view benc_filename, std::vector<char>* contents = nullptr, tr_error* error = nullptr);
 
+    // Re-reads info_dict_offset() from `benc_filename`, a rewrite of this
+    // torrent's file whose info dict must be byte-identical to this one's.
+    // Returns false and keeps the old offset if it is not.
+    bool update_info_dict_offset(std::string_view benc_filename, tr_error* error = nullptr);
+
     // FILES
 
     [[nodiscard]] constexpr auto const& files() const noexcept

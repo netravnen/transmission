@@ -2017,7 +2017,13 @@ bool tr_torrent::set_announce_list(tr_announce_list announce_list)
     if (has_metainfo())
     {
         filename = torrent_file();
-        tgt.save(filename, &save_error);
+
+        // get_metadata_piece() reads the info dict from this file, and
+        // tracker keys that change size before it move it
+        if (tgt.save(filename, &save_error))
+        {
+            metainfo_.update_info_dict_offset(filename, &save_error);
+        }
     }
     else
     {
