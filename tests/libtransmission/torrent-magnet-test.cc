@@ -8,7 +8,9 @@
 #include <string>
 #include <string_view>
 
+#include <libtransmission/crypto-utils.h>
 #include <libtransmission/error.h>
+#include <libtransmission/file.h>
 #include <libtransmission/torrent-magnet.h>
 #include <libtransmission/torrent-metainfo.h>
 
@@ -128,6 +130,37 @@ TEST_F(TorrentMagnetTest, setMetadataPieceKeepsWebseeds)
     ASSERT_TRUE(saved.parse_torrent_file(tor->torrent_file(), nullptr, &error)) << error.message();
     ASSERT_EQ(1U, saved.webseed_count());
     EXPECT_EQ(Webseed, saved.webseed(0));
+}
+
+TEST_F(TorrentMagnetTest, getMetadataPieceAfterTrackerEdit)
+{
+    auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
+    ASSERT_NE(nullptr, tor);
+
+    // "announce-list" sorts before "info", so adding tiers moves the info dict
+    auto const old_file_size = tr_sys_path_get_info(tor->torrent_file())->size;
+    ASSERT_TRUE(tor->set_announce_list(
+        std::string_view{ "https://tracker-a.example/announce\n"
+                          "\n"
+                          "https://tracker-b.example/announce\n"
+                          "\n"
+                          "https://tracker-c.example/announce\n" }));
+    ASSERT_LT(old_file_size, tr_sys_path_get_info(tor->torrent_file())->size);
+
+    auto info_dict = std::string{};
+    for (auto piece = 0;; ++piece)
+    {
+        auto const data = tor->get_metadata_piece(piece);
+        if (!data)
+        {
+            break;
+        }
+
+        info_dict.append(reinterpret_cast<char const*>(std::data(*data)), std::size(*data));
+    }
+
+    EXPECT_EQ(tor->info_dict_size(), std::size(info_dict));
+    EXPECT_EQ(tor->info_hash(), tr_sha1::digest(info_dict));
 }
 
 } // namespace libtransmission::test
