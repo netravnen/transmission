@@ -697,6 +697,28 @@ bool tr_torrent_metainfo::parse_torrent_file(std::string_view filename, std::vec
     return tr_file_read(filename, *contents, error) && parse_benc({ std::data(*contents), std::size(*contents) }, error);
 }
 
+bool tr_torrent_metainfo::update_info_dict_offset(std::string_view filename, tr_error* error)
+{
+    auto rewritten = tr_torrent_metainfo{};
+    if (!rewritten.parse_torrent_file(filename, nullptr, error))
+    {
+        return false;
+    }
+
+    if (rewritten.info_hash() != info_hash() || rewritten.info_dict_size() != info_dict_size())
+    {
+        if (error != nullptr)
+        {
+            error->set(EINVAL, fmt::format("'{}' no longer holds info dict {}", filename, info_hash_string()));
+        }
+
+        return false;
+    }
+
+    info_dict_offset_ = rewritten.info_dict_offset();
+    return true;
+}
+
 std::string tr_torrent_metainfo::make_filename(
     std::string_view dirname,
     std::string_view name,
