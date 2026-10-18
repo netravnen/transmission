@@ -2042,8 +2042,9 @@ bool tr_torrent::set_announce_list(tr_announce_list announce_list)
         filename = torrent_file();
 
         // get_metadata_piece() reads the info dict from this file, and
-        // tracker keys that change size before it move it
-        if (tgt.save(filename, &save_error))
+        // tracker keys that change size before it move it.
+        // Off by default: see relocate_info_dict_after_tracker_edit.
+        if (tgt.save(filename, &save_error) && session->isRelocateInfoDictEnabled())
         {
             metainfo_.update_info_dict_offset(filename, &save_error);
         }

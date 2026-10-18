@@ -479,6 +479,7 @@ enum // NOLINT(performance-enum-size)
     TR_KEY_recently_active,
     TR_KEY_recheck_progress_camel_APICOMPAT,
     TR_KEY_recheck_progress,
+    TR_KEY_relocate_info_dict_after_tracker_edit, /* settings */
     TR_KEY_remote_session_enabled_kebab_APICOMPAT,
     TR_KEY_remote_session_host_kebab_APICOMPAT,
     TR_KEY_remote_session_https_kebab_APICOMPAT,

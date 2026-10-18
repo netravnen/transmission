@@ -1003,6 +1003,11 @@ public:
         return settings().is_incomplete_file_naming_enabled;
     }
 
+    [[nodiscard]] constexpr auto isRelocateInfoDictEnabled() const noexcept
+    {
+        return settings().relocate_info_dict_after_tracker_edit;
+    }
+
     [[nodiscard]] constexpr auto isPortRandom() const noexcept
     {
         return settings().peer_port_random_on_start;
@@ -1170,6 +1175,7 @@ private:
     friend void tr_sessionSetRPCUsername(tr_session* session, std::string_view username);
     friend void tr_sessionSetRatioLimit(tr_session* session, double desired_ratio);
     friend void tr_sessionSetRatioLimited(tr_session* session, bool is_limited);
+    friend void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetUTPEnabled(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeed(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeedTime(tr_session* session, bool enabled);

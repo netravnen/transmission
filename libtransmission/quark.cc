@@ -468,6 +468,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "recently_active"sv, // rpc
     "recheckProgress"sv, // rpc
     "recheck_progress"sv, // rpc
+    "relocate_info_dict_after_tracker_edit"sv, // tr_session::Settings
     "remote-session-enabled"sv, // qt app
     "remote-session-host"sv, // qt app
     "remote-session-https"sv, // qt app

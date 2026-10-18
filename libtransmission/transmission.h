@@ -238,6 +238,17 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session);
  */
 void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
 
+/**
+ * @brief Find the info dictionary again in a torrent's rewritten .torrent file
+ *        after its tracker list changes, so that peers fetching the metadata
+ *        over BEP 9 get the correct bytes. Off by default.
+ * @see `tr_sessionIsRelocateInfoDictEnabled()`
+ */
+void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled);
+
+/** @see `tr_sessionSetRelocateInfoDictEnabled()` */
+bool tr_sessionIsRelocateInfoDictEnabled(tr_session const* session);
+
 /** @brief Get whether or not RPC calls are allowed in this session.
     @see `tr_sessionInit()`
     @see `tr_sessionSetRPCEnabled()` */

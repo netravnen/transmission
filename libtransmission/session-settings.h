@@ -93,6 +93,7 @@ public:
     bool port_forwarding_enabled = true;
     bool queue_stalled_enabled = true;
     bool ratio_limit_enabled = false;
+    bool relocate_info_dict_after_tracker_edit = false;
     bool script_torrent_added_enabled = false;
     bool script_torrent_done_enabled = false;
     bool script_torrent_done_seeding_enabled = false;
@@ -193,6 +194,7 @@ public:
         Field<&SessionSettings::queue_stalled_minutes>{ TR_KEY_queue_stalled_minutes },
         Field<&SessionSettings::ratio_limit>{ TR_KEY_seed_ratio_limit },
         Field<&SessionSettings::ratio_limit_enabled>{ TR_KEY_seed_ratio_limited },
+        Field<&SessionSettings::relocate_info_dict_after_tracker_edit>{ TR_KEY_relocate_info_dict_after_tracker_edit },
         Field<&SessionSettings::is_incomplete_file_naming_enabled>{ TR_KEY_rename_partial_files },
         Field<&SessionSettings::reqq>{ TR_KEY_reqq },
         Field<&SessionSettings::should_scrape_paused_torrents>{ TR_KEY_scrape_paused_torrents_enabled },
