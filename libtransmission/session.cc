@@ -1036,6 +1036,20 @@ bool tr_sessionIsKeepMagnetWebseedsEnabled(tr_session const* session)
     return session->isKeepMagnetWebseedsEnabled();
 }
 
+void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled)
+{
+    TR_ASSERT(session != nullptr);
+
+    session->settings_.relocate_info_dict_after_tracker_edit = enabled;
+}
+
+bool tr_sessionIsRelocateInfoDictEnabled(tr_session const* session)
+{
+    TR_ASSERT(session != nullptr);
+
+    return session->isRelocateInfoDictEnabled();
+}
+
 // ---
 
 void tr_sessionSetIncompleteDir(tr_session* session, std::string_view const dir)
