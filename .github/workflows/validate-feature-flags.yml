@@ -1,0 +1,117 @@
+# Validates the feature-flag patches in ci/patches before they are
+# committed to the fix branches: for each branch, check out its exact head,
+# apply its patch, check formatting, build libtransmission-test with
+# warnings as errors, and run the new tests and the full suite.
+#
+# Only this branch triggers it. Upstream's workflows run on main and 4.*.x.
+
+name: Validate feature-flag patches
+
+on:
+  push:
+    branches:
+      - 'ci/validate-feature-flags'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.patch }}
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - patch: offset-main
+            branch: fix/stale-metadata-offset-after-tracker-edit
+            sha: fe00004e93f8d093745464f05277c665655d25f0
+            tests: 'TorrentMagnetTest.getMetadataPieceAfterTrackerEdit:TorrentMagnetTest.getMetadataPieceAfterTrackerEditWithoutRelocation'
+          - patch: offset-4.1.x
+            branch: fix/stale-metadata-offset-after-tracker-edit--4.1.x
+            sha: 2c8b37e7e0b91c575c4e29e476387b8705e845c6
+            tests: 'TorrentMagnetTest.getMetadataPieceAfterTrackerEdit:TorrentMagnetTest.getMetadataPieceAfterTrackerEditWithoutRelocation'
+          - patch: webseed-main
+            branch: fix/magnet-webseeds-in-synthetic-torrent
+            sha: 5e35cc4ba9314a5c56c620e75b53047c80687152
+            tests: 'TorrentMagnetTest.setMetadataPieceKeepsWebseeds:TorrentMagnetTest.setMetadataPieceDropsWebseedsByDefault'
+          - patch: webseed-4.1.x
+            branch: fix/magnet-webseeds-in-synthetic-torrent--4.1.x
+            sha: d99fbd044fe6c5ac85f845b4e44bf728eeffcda9
+            tests: 'TorrentMagnetTest.setMetadataPieceKeepsWebseeds:TorrentMagnetTest.setMetadataPieceDropsWebseedsByDefault'
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git cmake ninja-build g++ pkg-config python3 python3-pip \
+            libcurl4-openssl-dev libssl-dev zlib1g-dev
+          pip install --break-system-packages clang-format==20.1.8
+          clang-format --version
+
+      - name: Check out the patches
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ci
+          sparse-checkout: ci/patches
+
+      - name: Check out ${{ matrix.branch }} at ${{ matrix.sha }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.sha }}
+          path: src
+          submodules: recursive
+
+      - name: Apply the patch
+        run: |
+          set -euo pipefail
+          cd src
+          git config --global --add safe.directory "$PWD"
+          test "$(git rev-parse HEAD)" = "${{ matrix.sha }}"
+          git apply --check "../ci/ci/patches/${{ matrix.patch }}.patch"
+          git apply "../ci/ci/patches/${{ matrix.patch }}.patch"
+          git status --short
+
+      - name: Check formatting of the changed C++ files
+        run: |
+          set -euo pipefail
+          cd src
+          files=$(git status --short | awk '{print $2}' | grep -E '\.(cc|h)$')
+          echo "$files"
+          clang-format --dry-run --Werror $files
+
+      - name: Build libtransmission-test with warnings as errors
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          chown -R builder: "$GITHUB_WORKSPACE/src"
+          su builder -c "cmake -S '$GITHUB_WORKSPACE/src' -B '$GITHUB_WORKSPACE/src/build' -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DENABLE_TESTS=ON -DENABLE_WERROR=ON -DRUN_CLANG_TIDY=OFF \
+            -DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_MAC=OFF -DENABLE_DAEMON=OFF -DENABLE_CLI=OFF \
+            -DENABLE_UTILS=OFF -DREBUILD_WEB=OFF -DINSTALL_WEB=OFF -DENABLE_NLS=OFF"
+          su builder -c "cmake --build '$GITHUB_WORKSPACE/src/build' --target libtransmission-test -j $(nproc)"
+
+      - name: Run the new tests
+        run: |
+          set -euo pipefail
+          T="$GITHUB_WORKSPACE/src/build/tests/libtransmission/libtransmission-test"
+          su builder -c "cd '$GITHUB_WORKSPACE/src/build' && TMPDIR=/tmp '$T' --gtest_filter='${{ matrix.tests }}'" \
+            2>&1 | tee "$GITHUB_WORKSPACE/new-tests.log"
+          grep -F '[  PASSED  ] 2 tests' "$GITHUB_WORKSPACE/new-tests.log"
+
+      - name: Run the full libtransmission-test suite
+        run: |
+          set -euo pipefail
+          T="$GITHUB_WORKSPACE/src/build/tests/libtransmission/libtransmission-test"
+          su builder -c "cd '$GITHUB_WORKSPACE/src/build' && TMPDIR=/tmp '$T'" 2>&1 | tee "$GITHUB_WORKSPACE/full-suite.log" | tail -5
+          grep -E '^\[  PASSED  \] [0-9]+ tests' "$GITHUB_WORKSPACE/full-suite.log"
+          ! grep -E '^\[  FAILED  \]' "$GITHUB_WORKSPACE/full-suite.log"

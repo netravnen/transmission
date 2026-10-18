@@ -1,0 +1,209 @@
+diff --git a/docs/Editing-Configuration-Files.md b/docs/Editing-Configuration-Files.md
+index 4ab327fc4..91726d1a8 100644
+--- a/docs/Editing-Configuration-Files.md
++++ b/docs/Editing-Configuration-Files.md
+@@ -72,6 +72,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
+  * **download_dir:** String (default = [default locations](Configuration-Files.md#Locations))
+  * **incomplete_dir:** String (default = [default locations](Configuration-Files.md#Locations)) Directory to keep files in until torrent is complete.
+  * **incomplete_dir_enabled:** Boolean (default = false) When enabled, new torrents will download the files to `incomplete_dir`. When complete, the files will be moved to `download_dir`.
++ * **keep_magnet_webseeds:** Boolean (default = false) Keep the webseeds from a magnet link's `ws=` parameter when the torrent's metadata finishes downloading, in the saved `.torrent` file and in the torrent's webseed list. When false, the webseeds are dropped at that point.
+  * **preallocation:** Number (0 = Off, 1 = Fast, 2 = Full (slower but reduces disk fragmentation), default = 1)
+  * **rename_partial_files:** Boolean (default = true) Postfix partially downloaded files with ".part".
+  * **start_added_torrents:** Boolean (default = true) Start torrents as soon as they are added.
+diff --git a/libtransmission/quark.cc b/libtransmission/quark.cc
+index 97b47df1e..49ec9062e 100644
+--- a/libtransmission/quark.cc
++++ b/libtransmission/quark.cc
+@@ -272,6 +272,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
+     "is_uploading_to"sv, // rpc
+     "is_utp"sv, // rpc
+     "jsonrpc"sv, // json-rpc
++    "keep_magnet_webseeds"sv, // tr_session::Settings
+     "labels"sv, // .resume, rpc
+     "lastAnnouncePeerCount"sv, // rpc
+     "lastAnnounceResult"sv, // rpc
+diff --git a/libtransmission/quark.h b/libtransmission/quark.h
+index 0a42044b6..f88037cc0 100644
+--- a/libtransmission/quark.h
++++ b/libtransmission/quark.h
+@@ -285,6 +285,7 @@ enum // NOLINT(performance-enum-size)
+     TR_KEY_is_uploading_to,
+     TR_KEY_is_utp,
+     TR_KEY_jsonrpc,
++    TR_KEY_keep_magnet_webseeds, /* settings */
+     TR_KEY_labels,
+     TR_KEY_last_announce_peer_count_camel_APICOMPAT,
+     TR_KEY_last_announce_result_camel_APICOMPAT,
+diff --git a/libtransmission/session.cc b/libtransmission/session.cc
+index eadb60d7b..bb4f6f006 100644
+--- a/libtransmission/session.cc
++++ b/libtransmission/session.cc
+@@ -1015,6 +1015,20 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session)
+     return session->isIncompleteFileNamingEnabled();
+ }
+ 
++void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled)
++{
++    TR_ASSERT(session != nullptr);
++
++    session->settings_.keep_magnet_webseeds = enabled;
++}
++
++bool tr_sessionIsKeepMagnetWebseedsEnabled(tr_session const* session)
++{
++    TR_ASSERT(session != nullptr);
++
++    return session->isKeepMagnetWebseedsEnabled();
++}
++
+ // ---
+ 
+ void tr_sessionSetIncompleteDir(tr_session* session, char const* dir)
+diff --git a/libtransmission/session.h b/libtransmission/session.h
+index 092cc3214..495c8506a 100644
+--- a/libtransmission/session.h
++++ b/libtransmission/session.h
+@@ -426,6 +426,7 @@ public:
+         bool idle_seeding_limit_enabled = false;
+         bool incomplete_dir_enabled = false;
+         bool is_incomplete_file_naming_enabled = true;
++        bool keep_magnet_webseeds = false;
+         bool lpd_enabled = true;
+         bool peer_port_random_on_start = false;
+         bool pex_enabled = true;
+@@ -506,6 +507,7 @@ public:
+             Field<&Settings::idle_seeding_limit_enabled>{ TR_KEY_idle_seeding_limit_enabled },
+             Field<&Settings::incomplete_dir>{ TR_KEY_incomplete_dir },
+             Field<&Settings::incomplete_dir_enabled>{ TR_KEY_incomplete_dir_enabled },
++            Field<&Settings::keep_magnet_webseeds>{ TR_KEY_keep_magnet_webseeds },
+             Field<&Settings::lpd_enabled>{ TR_KEY_lpd_enabled },
+             Field<&Settings::log_level>{ TR_KEY_message_level },
+             Field<&Settings::peer_congestion_algorithm>{ TR_KEY_peer_congestion_algorithm },
+@@ -1130,6 +1132,11 @@ public:
+         return settings().is_incomplete_file_naming_enabled;
+     }
+ 
++    [[nodiscard]] constexpr auto isKeepMagnetWebseedsEnabled() const noexcept
++    {
++        return settings().keep_magnet_webseeds;
++    }
++
+     [[nodiscard]] constexpr auto isPortRandom() const noexcept
+     {
+         return settings().peer_port_random_on_start;
+@@ -1273,6 +1280,7 @@ private:
+     friend void tr_sessionSetIdleLimit(tr_session* session, uint16_t idle_minutes);
+     friend void tr_sessionSetIdleLimited(tr_session* session, bool is_limited);
+     friend void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
++    friend void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled);
+     friend void tr_sessionSetLPDEnabled(tr_session* session, bool enabled);
+     friend void tr_sessionSetPaused(tr_session* session, bool is_paused);
+     friend void tr_sessionSetPeerLimit(tr_session* session, uint16_t max_global_peers);
+diff --git a/libtransmission/torrent-magnet.cc b/libtransmission/torrent-magnet.cc
+index ce9c12841..3fdb79493 100644
+--- a/libtransmission/torrent-magnet.cc
++++ b/libtransmission/torrent-magnet.cc
+@@ -148,7 +148,7 @@ namespace
+ {
+ namespace set_metadata_piece_helpers
+ {
+-tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
++tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm, bool const keep_webseeds)
+ {
+     auto top = tr_variant::Map{ 8U };
+ 
+@@ -177,7 +177,8 @@ tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
+         announce_list.add_to_map(top);
+     }
+ 
+-    if (auto const n_webseeds = tm.webseed_count(); n_webseeds > 0U)
++    // Off by default: see keep_magnet_webseeds.
++    if (auto const n_webseeds = tm.webseed_count(); keep_webseeds && n_webseeds > 0U)
+     {
+         auto webseed_vec = tr_variant::Vector{};
+         webseed_vec.reserve(n_webseeds);
+@@ -221,7 +222,7 @@ tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
+     }
+ 
+     // yay we have an info dict. Let's make a torrent file
+-    auto top_var = build_metainfo_except_info_dict(metainfo());
++    auto top_var = build_metainfo_except_info_dict(metainfo(), session->isKeepMagnetWebseedsEnabled());
+     tr_variantMergeDicts(tr_variantDictAddDict(&top_var, TR_KEY_info, 0), &*info_dict_v);
+     auto const benc = serde.to_string(top_var);
+ 
+diff --git a/libtransmission/transmission.h b/libtransmission/transmission.h
+index 6a591d4ba..c31811f56 100644
+--- a/libtransmission/transmission.h
++++ b/libtransmission/transmission.h
+@@ -315,6 +315,16 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session);
+  */
+ void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
+ 
++/**
++ * @brief Keep the webseeds from a magnet link's ws= parameter when its
++ *        metadata finishes downloading. Off by default.
++ * @see `tr_sessionIsKeepMagnetWebseedsEnabled()`
++ */
++void tr_sessionSetKeepMagnetWebseedsEnabled(tr_session* session, bool enabled);
++
++/** @see `tr_sessionSetKeepMagnetWebseedsEnabled()` */
++bool tr_sessionIsKeepMagnetWebseedsEnabled(tr_session const* session);
++
+ /** @brief Get whether or not RPC calls are allowed in this session.
+     @see `tr_sessionInit()`
+     @see `tr_sessionSetRPCEnabled()` */
+diff --git a/tests/libtransmission/torrent-magnet-test.cc b/tests/libtransmission/torrent-magnet-test.cc
+index ad49214e9..b952eaeed 100644
+--- a/tests/libtransmission/torrent-magnet-test.cc
++++ b/tests/libtransmission/torrent-magnet-test.cc
+@@ -96,6 +96,8 @@ TEST_F(TorrentMagnetTest, setMetadataPiece)
+ 
+ TEST_F(TorrentMagnetTest, setMetadataPieceKeepsWebseeds)
+ {
++    tr_sessionSetKeepMagnetWebseedsEnabled(session_, true);
++
+     static auto constexpr Magnet =
+         "magnet:?xt=urn:btih:fa5794674a18241bec985ddc3390e3cb171345e4"
+         "&ws=http%3A%2F%2Fwww.example.com%2Fpath%2F"sv;
+@@ -130,4 +132,41 @@ TEST_F(TorrentMagnetTest, setMetadataPieceKeepsWebseeds)
+     EXPECT_EQ(Webseed, saved.webseed(0));
+ }
+ 
++TEST_F(TorrentMagnetTest, setMetadataPieceDropsWebseedsByDefault)
++{
++    // The default keeps the old behaviour: the ws= webseeds are dropped once
++    // the metadata arrives.
++    EXPECT_FALSE(tr_sessionIsKeepMagnetWebseedsEnabled(session_));
++
++    static auto constexpr Magnet =
++        "magnet:?xt=urn:btih:fa5794674a18241bec985ddc3390e3cb171345e4"
++        "&ws=http%3A%2F%2Fwww.example.com%2Fpath%2F"sv;
++
++    auto* const ctor = tr_ctorNew(session_);
++    EXPECT_TRUE(ctor->set_metainfo_from_magnet_link(Magnet));
++    tr_ctorSetPaused(ctor, TR_FORCE, true);
++    auto* const tor = tr_torrentNew(ctor, nullptr);
++    tr_ctorFree(ctor);
++    ASSERT_NE(nullptr, tor);
++    EXPECT_FALSE(tor->has_metainfo());
++    EXPECT_EQ(1U, tor->webseed_count());
++
++    auto const metainfo_benc = tr_base64_decode(InfoDictBase64);
++    auto const metainfo_size = std::size(metainfo_benc);
++    session_->run_in_session_thread(
++        [&]()
++        {
++            tor->maybe_start_metadata_transfer(metainfo_size);
++            tor->set_metadata_piece(0, std::data(metainfo_benc), metainfo_size);
++        });
++    ASSERT_TRUE(waitFor([tor] { return tor->has_metainfo(); }, 5s));
++
++    EXPECT_EQ(0U, tor->webseed_count());
++
++    auto saved = tr_torrent_metainfo{};
++    auto error = tr_error{};
++    ASSERT_TRUE(saved.parse_torrent_file(tor->torrent_file(), nullptr, &error)) << error.message();
++    EXPECT_EQ(0U, saved.webseed_count());
++}
++
+ } // namespace libtransmission::test

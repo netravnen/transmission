@@ -1,0 +1,196 @@
+diff --git a/docs/Editing-Configuration-Files.md b/docs/Editing-Configuration-Files.md
+index 7f15ece79..4da91e136 100644
+--- a/docs/Editing-Configuration-Files.md
++++ b/docs/Editing-Configuration-Files.md
+@@ -73,6 +73,7 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
+  * **incomplete_dir:** String (default = [default locations](Configuration-Files.md#Locations)) Directory to keep files in until torrent is complete.
+  * **incomplete_dir_enabled:** Boolean (default = false) When enabled, new torrents will download the files to `incomplete_dir`. When complete, the files will be moved to `download_dir`.
+  * **preallocation:** Number (0 = Off, 1 = Fast, 2 = Full (slower but reduces disk fragmentation), default = 1)
++ * **relocate_info_dict_after_tracker_edit:** Boolean (default = false) After a torrent's tracker list changes, find the info dictionary again in the rewritten `.torrent` file, so that peers that fetch the metadata over BEP 9 (`ut_metadata`) get the correct bytes. When false, the daemon keeps serving the metadata from the position it recorded when it loaded the file. After a tracker edit that changes the length of the file before the info dictionary, that position is wrong until the daemon restarts.
+  * **rename_partial_files:** Boolean (default = true) Postfix partially downloaded files with ".part".
+  * **start_added_torrents:** Boolean (default = true) Start torrents as soon as they are added.
+  * **trash_can_enabled:** Boolean (default = true) Whether to move the torrents to the system's trashcan or unlink them right away upon deletion from Transmission.
+diff --git a/libtransmission/quark.cc b/libtransmission/quark.cc
+index 52391f54a..ea7366f6b 100644
+--- a/libtransmission/quark.cc
++++ b/libtransmission/quark.cc
+@@ -468,6 +468,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
+     "recently_active"sv, // rpc
+     "recheckProgress"sv, // rpc
+     "recheck_progress"sv, // rpc
++    "relocate_info_dict_after_tracker_edit"sv, // tr_session::Settings
+     "remote-session-enabled"sv, // qt app
+     "remote-session-host"sv, // qt app
+     "remote-session-https"sv, // qt app
+diff --git a/libtransmission/quark.h b/libtransmission/quark.h
+index e8be8aeb1..b4c83924b 100644
+--- a/libtransmission/quark.h
++++ b/libtransmission/quark.h
+@@ -479,6 +479,7 @@ enum // NOLINT(performance-enum-size)
+     TR_KEY_recently_active,
+     TR_KEY_recheck_progress_camel_APICOMPAT,
+     TR_KEY_recheck_progress,
++    TR_KEY_relocate_info_dict_after_tracker_edit, /* settings */
+     TR_KEY_remote_session_enabled_kebab_APICOMPAT,
+     TR_KEY_remote_session_host_kebab_APICOMPAT,
+     TR_KEY_remote_session_https_kebab_APICOMPAT,
+diff --git a/libtransmission/session-settings.h b/libtransmission/session-settings.h
+index 557706066..d05cee1b2 100644
+--- a/libtransmission/session-settings.h
++++ b/libtransmission/session-settings.h
+@@ -93,6 +93,7 @@ public:
+     bool port_forwarding_enabled = true;
+     bool queue_stalled_enabled = true;
+     bool ratio_limit_enabled = false;
++    bool relocate_info_dict_after_tracker_edit = false;
+     bool script_torrent_added_enabled = false;
+     bool script_torrent_done_enabled = false;
+     bool script_torrent_done_seeding_enabled = false;
+@@ -193,6 +194,7 @@ public:
+         Field<&SessionSettings::queue_stalled_minutes>{ TR_KEY_queue_stalled_minutes },
+         Field<&SessionSettings::ratio_limit>{ TR_KEY_seed_ratio_limit },
+         Field<&SessionSettings::ratio_limit_enabled>{ TR_KEY_seed_ratio_limited },
++        Field<&SessionSettings::relocate_info_dict_after_tracker_edit>{ TR_KEY_relocate_info_dict_after_tracker_edit },
+         Field<&SessionSettings::is_incomplete_file_naming_enabled>{ TR_KEY_rename_partial_files },
+         Field<&SessionSettings::reqq>{ TR_KEY_reqq },
+         Field<&SessionSettings::should_scrape_paused_torrents>{ TR_KEY_scrape_paused_torrents_enabled },
+diff --git a/libtransmission/session.cc b/libtransmission/session.cc
+index 97b2d0215..61cd2c546 100644
+--- a/libtransmission/session.cc
++++ b/libtransmission/session.cc
+@@ -1022,6 +1022,20 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session)
+     return session->isIncompleteFileNamingEnabled();
+ }
+ 
++void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled)
++{
++    TR_ASSERT(session != nullptr);
++
++    session->settings_.relocate_info_dict_after_tracker_edit = enabled;
++}
++
++bool tr_sessionIsRelocateInfoDictEnabled(tr_session const* session)
++{
++    TR_ASSERT(session != nullptr);
++
++    return session->isRelocateInfoDictEnabled();
++}
++
+ // ---
+ 
+ void tr_sessionSetIncompleteDir(tr_session* session, std::string_view const dir)
+diff --git a/libtransmission/session.h b/libtransmission/session.h
+index 3e0988236..3d6c605f6 100644
+--- a/libtransmission/session.h
++++ b/libtransmission/session.h
+@@ -1003,6 +1003,11 @@ public:
+         return settings().is_incomplete_file_naming_enabled;
+     }
+ 
++    [[nodiscard]] constexpr auto isRelocateInfoDictEnabled() const noexcept
++    {
++        return settings().relocate_info_dict_after_tracker_edit;
++    }
++
+     [[nodiscard]] constexpr auto isPortRandom() const noexcept
+     {
+         return settings().peer_port_random_on_start;
+@@ -1170,6 +1175,7 @@ private:
+     friend void tr_sessionSetRPCUsername(tr_session* session, std::string_view username);
+     friend void tr_sessionSetRatioLimit(tr_session* session, double desired_ratio);
+     friend void tr_sessionSetRatioLimited(tr_session* session, bool is_limited);
++    friend void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled);
+     friend void tr_sessionSetUTPEnabled(tr_session* session, bool enabled);
+     friend void tr_sessionUseAltSpeed(tr_session* session, bool enabled);
+     friend void tr_sessionUseAltSpeedTime(tr_session* session, bool enabled);
+diff --git a/libtransmission/torrent.cc b/libtransmission/torrent.cc
+index 4f0e280d1..209e64efe 100644
+--- a/libtransmission/torrent.cc
++++ b/libtransmission/torrent.cc
+@@ -2042,8 +2042,9 @@ bool tr_torrent::set_announce_list(tr_announce_list announce_list)
+         filename = torrent_file();
+ 
+         // get_metadata_piece() reads the info dict from this file, and
+-        // tracker keys that change size before it move it
+-        if (tgt.save(filename, &save_error))
++        // tracker keys that change size before it move it.
++        // Off by default: see relocate_info_dict_after_tracker_edit.
++        if (tgt.save(filename, &save_error) && session->isRelocateInfoDictEnabled())
+         {
+             metainfo_.update_info_dict_offset(filename, &save_error);
+         }
+diff --git a/libtransmission/transmission.h b/libtransmission/transmission.h
+index a6257c1ec..79fd6cac6 100644
+--- a/libtransmission/transmission.h
++++ b/libtransmission/transmission.h
+@@ -238,6 +238,17 @@ bool tr_sessionIsIncompleteFileNamingEnabled(tr_session const* session);
+  */
+ void tr_sessionSetIncompleteFileNamingEnabled(tr_session* session, bool enabled);
+ 
++/**
++ * @brief Find the info dictionary again in a torrent's rewritten .torrent file
++ *        after its tracker list changes, so that peers fetching the metadata
++ *        over BEP 9 get the correct bytes. Off by default.
++ * @see `tr_sessionIsRelocateInfoDictEnabled()`
++ */
++void tr_sessionSetRelocateInfoDictEnabled(tr_session* session, bool enabled);
++
++/** @see `tr_sessionSetRelocateInfoDictEnabled()` */
++bool tr_sessionIsRelocateInfoDictEnabled(tr_session const* session);
++
+ /** @brief Get whether or not RPC calls are allowed in this session.
+     @see `tr_sessionInit()`
+     @see `tr_sessionSetRPCEnabled()` */
+diff --git a/tests/libtransmission/torrent-magnet-test.cc b/tests/libtransmission/torrent-magnet-test.cc
+index bf578c573..89026f198 100644
+--- a/tests/libtransmission/torrent-magnet-test.cc
++++ b/tests/libtransmission/torrent-magnet-test.cc
+@@ -95,6 +95,8 @@ TEST_F(TorrentMagnetTest, setMetadataPiece)
+ 
+ TEST_F(TorrentMagnetTest, getMetadataPieceAfterTrackerEdit)
+ {
++    tr_sessionSetRelocateInfoDictEnabled(session_, true);
++
+     auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
+     ASSERT_NE(nullptr, tor);
+ 
+@@ -124,4 +126,39 @@ TEST_F(TorrentMagnetTest, getMetadataPieceAfterTrackerEdit)
+     EXPECT_EQ(tor->info_hash(), tr_sha1::digest(info_dict));
+ }
+ 
++TEST_F(TorrentMagnetTest, getMetadataPieceAfterTrackerEditWithoutRelocation)
++{
++    // The default keeps the old behaviour: the offset is not refreshed after
++    // the rewrite, so the served bytes do not hash to the infohash.
++    EXPECT_FALSE(tr_sessionIsRelocateInfoDictEnabled(session_));
++
++    auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
++    ASSERT_NE(nullptr, tor);
++
++    // "announce-list" sorts before "info", so adding tiers moves the info dict
++    auto const old_file_size = tr_sys_path_get_info(tor->torrent_file())->size;
++    ASSERT_TRUE(tor->set_announce_list(
++        std::string_view{ "https://tracker-a.example/announce\n"
++                          "\n"
++                          "https://tracker-b.example/announce\n"
++                          "\n"
++                          "https://tracker-c.example/announce\n" }));
++    ASSERT_LT(old_file_size, tr_sys_path_get_info(tor->torrent_file())->size);
++
++    auto info_dict = std::string{};
++    for (auto piece = 0;; ++piece)
++    {
++        auto const data = tor->get_metadata_piece(piece);
++        if (!data)
++        {
++            break;
++        }
++
++        info_dict.append(reinterpret_cast<char const*>(std::data(*data)), std::size(*data));
++    }
++
++    EXPECT_EQ(tor->info_dict_size(), std::size(info_dict));
++    EXPECT_NE(tor->info_hash(), tr_sha1::digest(info_dict));
++}
++
+ } // namespace tr::test
