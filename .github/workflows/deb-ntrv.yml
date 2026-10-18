@@ -236,7 +236,7 @@ jobs:
           set -euo pipefail
           cd debs
           apt-get install -y --no-install-recommends \
-            ./transmission-common_*_all.deb ./transmission-daemon_*_amd64.deb ./transmission-cli_*_amd64.deb \
+            ./transmission-common_*.deb ./transmission-daemon_*.deb ./transmission-cli_*.deb \
             2>&1 | tee ../install.log
           dpkg-query -W 'transmission*' | tee ../installed.txt
           for pkg in transmission-daemon transmission-common transmission-cli; do
