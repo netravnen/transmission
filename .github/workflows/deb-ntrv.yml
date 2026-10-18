@@ -1,0 +1,165 @@
+# Builds Debian's trixie-backports transmission package with the fixes on
+# this release branch added as quilt patches, so the result installs over
+# 4.1.3+dfsg-1~bpo13+1 with the same package names, paths and service user.
+#
+# Only release/*-ntrv* branches trigger it. The upstream workflows run on
+# main and 4.*.x only, so a push here starts nothing else.
+
+name: Debian package (4.1.3 + ntrv fixes)
+
+on:
+  push:
+    branches:
+      - 'release/*-ntrv*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deb-ntrv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deb:
+    name: Build .deb on Debian 13 (trixie-backports base)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      UPSTREAM_TAG: '4.1.3'
+      BASE_VERSION: '4.1.3+dfsg-1~bpo13+1'
+      LOCAL_VERSION: '4.1.3+dfsg-1~bpo13+1+ntrv1'
+      DEBFULLNAME: netravnen
+      DEBEMAIL: 1938389+netravnen@users.noreply.github.com
+    steps:
+      - name: Install packaging tools and enable trixie-backports sources
+        run: |
+          set -euo pipefail
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+          printf '%s\n' \
+            'Types: deb deb-src' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git devscripts dpkg-dev quilt fakeroot
+
+      - name: Check out this release branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          path: src
+
+      - name: Fetch Debian's source package
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/src"
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          cd "$GITHUB_WORKSPACE/build"
+          apt-get source -t trixie-backports "transmission=${BASE_VERSION}"
+          ls -la
+
+      - name: Confirm Debian's library sources match the upstream tag
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          cd "$GITHUB_WORKSPACE/src"
+          for f in $(git diff --name-only "${UPSTREAM_TAG}" HEAD -- libtransmission); do
+            echo "checking $f"
+            git show "${UPSTREAM_TAG}:$f" | cmp - "$D/$f"
+          done
+
+      - name: Add the fixes as quilt patches
+        # packaging/debian/patches holds the branch's two commits as DEP-3
+        # patches. Their library hunks are the commits unchanged; their test
+        # hunks are rebased onto Debian's use-system-libs.patch, which moves
+        # the gtest include in every test file.
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          mkdir -p "$GITHUB_WORKSPACE/patches"
+          for p in "$GITHUB_WORKSPACE"/src/packaging/debian/patches/ntrv-*.patch; do
+            cp "$p" "$D/debian/patches/"
+            cp "$p" "$GITHUB_WORKSPACE/patches/"
+            basename "$p" >> "$D/debian/patches/series"
+          done
+          test "$(ls "$GITHUB_WORKSPACE"/patches/ntrv-*.patch | wc -l)" -eq 2
+          cd "$D"
+          QUILT_PATCHES=debian/patches quilt push -a --fuzz=0
+          cat debian/patches/series
+
+      - name: Confirm the patched tree carries exactly this branch's changes
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          cd "$GITHUB_WORKSPACE/src"
+          for f in $(git diff --name-only "${UPSTREAM_TAG}" HEAD -- libtransmission); do
+            echo "checking $f"
+            git show "HEAD:$f" | cmp - "$D/$f"
+          done
+          # The test file differs from the branch only in Debian's gtest include.
+          strip_gtest() { grep -v -E '^#include [<"]gtest/gtest\.h[>"]$' | grep -v '^$'; }
+          t=tests/libtransmission/torrent-magnet-test.cc
+          diff <(git show "HEAD:$t" | strip_gtest) <(strip_gtest < "$D/$t")
+
+      - name: Set the local package version
+        run: |
+          set -euo pipefail
+          cd "$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)"
+          dch --newversion "${LOCAL_VERSION}" --distribution trixie-backports --force-distribution \
+            "Rebuild of ${BASE_VERSION} with the fixes on github.com/${GITHUB_REPOSITORY} ${GITHUB_REF_NAME} (${GITHUB_SHA})."
+          dch --append "Keep magnet webseeds in the synthetic .torrent."
+          dch --append "Re-locate the info dict after a tracker edit (transmission/transmission#9151)."
+          sed -n '1,10p' debian/changelog
+
+      - name: Install build dependencies
+        run: apt-get build-dep -y -t trixie-backports "transmission=${BASE_VERSION}"
+
+      - name: Build source and binary packages as an unprivileged user
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          chown -R builder: "$GITHUB_WORKSPACE/build"
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          su builder -c "cd '$D' && DEB_BUILD_OPTIONS='parallel=$(nproc)' dpkg-buildpackage -us -uc -rfakeroot" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Run the two new tests explicitly
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          T="$D/obj-x86_64-linux-gnu/tests/libtransmission/libtransmission-test"
+          test -x "$T"
+          su builder -c "'$T' --gtest_filter='TorrentMagnetTest.*'" 2>&1 | tee "$GITHUB_WORKSPACE/new-tests.log"
+          grep -F '[       OK ] TorrentMagnetTest.setMetadataPieceKeepsWebseeds' "$GITHUB_WORKSPACE/new-tests.log"
+          grep -F '[       OK ] TorrentMagnetTest.getMetadataPieceAfterTrackerEdit' "$GITHUB_WORKSPACE/new-tests.log"
+          grep -F '[  PASSED  ] 4 tests' "$GITHUB_WORKSPACE/new-tests.log"
+
+      - name: Collect the packages
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd "$GITHUB_WORKSPACE/build"
+          cp -v ./*.deb ./*.changes ./*.buildinfo ./*.dsc ./*.debian.tar.* "$GITHUB_WORKSPACE/out/" || true
+          cp -v "$GITHUB_WORKSPACE"/build.log "$GITHUB_WORKSPACE"/new-tests.log "$GITHUB_WORKSPACE/out/" || true
+          cp -rv "$GITHUB_WORKSPACE/patches" "$GITHUB_WORKSPACE/out/" || true
+          cd "$GITHUB_WORKSPACE/out" && { sha256sum ./*.deb > SHA256SUMS || true; }
+          ls -la "$GITHUB_WORKSPACE/out"
+
+      - name: Upload the packages
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transmission-${{ env.LOCAL_VERSION }}-amd64
+          path: out/
+          if-no-files-found: error
