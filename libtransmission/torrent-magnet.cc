@@ -185,6 +185,7 @@ tr_variant build_metainfo_except_info_dict(tr_torrent_metainfo const& tm)
         {
             webseed_vec.emplace_back(tm.webseed(i));
         }
+        top.try_emplace(TR_KEY_url_list, std::move(webseed_vec));
     }
 
     return tr_variant{ std::move(top) };
