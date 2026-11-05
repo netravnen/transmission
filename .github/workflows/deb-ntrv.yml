@@ -1,0 +1,520 @@
+# Fork-only workflow. Builds Debian's trixie-backports transmission package
+# with this fork's patch set added as quilt patches, so the result installs
+# over the official backport with the same package names, paths and service
+# user.
+#
+# patches/main is stacked on the newest upstream release tag (see FORK.md).
+# The plan job reads that tag from the branch, finds Debian's trixie-backports
+# source package for the same upstream version, and turns every commit since
+# the tag that touches the code into one quilt patch. Commits that touch only
+# .github/, packaging/ or FORK.md are fork tooling and stay out of the package.
+#
+# A push to patches/main publishes the packages as a GitHub release. A pull
+# request builds and tests them without publishing. The weekly run rebuilds
+# only when Debian has published a new revision for the same tag.
+
+name: Debian package (patch set)
+
+on:
+  push:
+    branches: [patches/main]
+  pull_request:
+    branches: [patches/main]
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Not cancelled: a second run for the same commit waits, then finds the
+  # release the first one published and skips.
+  group: deb-ntrv-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/transmission/transmission.git
+  # Paths that are fork tooling, not part of the patched program.
+  TOOLING_PATHSPEC: ":(exclude).github :(exclude)packaging :(exclude)FORK.md"
+
+jobs:
+  plan:
+    name: Work out the tag, the Debian base and the release
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      base: ${{ steps.plan.outputs.base }}
+      local: ${{ steps.plan.outputs.local }}
+      release: ${{ steps.plan.outputs.release }}
+      skip: ${{ steps.plan.outputs.skip }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install tools and enable trixie-backports sources
+        run: |
+          set -euo pipefail
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+          printf '%s\n' \
+            'Types: deb deb-src' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git curl
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Plan
+        id: plan
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --no-tags "$UPSTREAM_URL" '+refs/tags/*:refs/tags/*'
+          tag=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD)
+          echo "Patch set is stacked on upstream $tag."
+          # The newest trixie-backports source version for that upstream version.
+          base=
+          while read -r v; do
+            if [ -z "$base" ] || dpkg --compare-versions "$v" gt "$base"; then base=$v; fi
+          done < <(apt-cache showsrc transmission | sed -n 's/^Version: //p' \
+            | grep -E "^${tag//./\\.}\+dfsg-[^ ]*~bpo13\+[0-9]+$" | sort -u)
+          if [ -z "$base" ]; then
+            echo "::error::Debian has no trixie-backports source package for upstream $tag yet. Rerun once it is published."
+            exit 1
+          fi
+          local_version="${base}+ntrv${GITHUB_RUN_NUMBER}"
+          # A release is named by the Debian base and the commit, so a rebuild
+          # of the same commit on the same base is not published twice.
+          # Git refs may not hold "~", and the API path may not hold "/".
+          release="deb-${base//\~/_}-$(git rev-parse --short=12 HEAD)"
+          skip=false
+          if [ "$EVENT" != pull_request ]; then
+            if curl -fsS -o /dev/null -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${GH_REPO}/releases/tags/${release}"; then
+              echo "Release $release exists; nothing to build."
+              skip=true
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "base=$base"
+            echo "local=$local_version"
+            echo "release=$release"
+            echo "skip=$skip"
+          } | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Plan"
+            echo "- upstream tag: \`$tag\`"
+            echo "- Debian base: \`$base\`"
+            echo "- package version: \`$local_version\`"
+            echo "- release: \`$release\` (skip: $skip)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deb:
+    name: Build .deb on Debian 13 (trixie-backports base)
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      UPSTREAM_TAG: ${{ needs.plan.outputs.tag }}
+      BASE_VERSION: ${{ needs.plan.outputs.base }}
+      LOCAL_VERSION: ${{ needs.plan.outputs.local }}
+      DEBFULLNAME: netravnen
+      DEBEMAIL: 1938389+netravnen@users.noreply.github.com
+    steps:
+      - name: Install packaging tools and enable trixie-backports sources
+        run: |
+          set -euo pipefail
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+          printf '%s\n' \
+            'Types: deb deb-src' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git devscripts dpkg-dev quilt fakeroot
+
+      - name: Check out the patch set
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: src
+
+      - name: Fetch upstream tags
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/src"
+          cd "$GITHUB_WORKSPACE/src"
+          git fetch --no-tags "$UPSTREAM_URL" '+refs/tags/*:refs/tags/*'
+          git merge-base --is-ancestor "$UPSTREAM_TAG" HEAD
+
+      - name: Fetch Debian's source package
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          cd "$GITHUB_WORKSPACE/build"
+          apt-get source -t trixie-backports "transmission=${BASE_VERSION}"
+          ls -la
+
+      - name: Export the patch set as quilt patches
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/src"
+          mkdir -p "$GITHUB_WORKSPACE/patches"
+          # shellcheck disable=SC2086 # the pathspec is a word list on purpose
+          git -c core.abbrev=12 format-patch --no-stat --no-signature --zero-commit \
+            --start-number 1 -o "$GITHUB_WORKSPACE/patches" \
+            "$UPSTREAM_TAG"..HEAD -- . $TOOLING_PATHSPEC
+          cd "$GITHUB_WORKSPACE/patches"
+          n=0
+          for p in [0-9][0-9][0-9][0-9]-*.patch; do
+            mv "$p" "ntrv-$p"
+            n=$((n + 1))
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no code commits between $UPSTREAM_TAG and HEAD"
+            exit 1
+          fi
+          ls -1
+
+      - name: Confirm Debian's sources match the upstream tag for every patched file
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          cd "$GITHUB_WORKSPACE/src"
+          # shellcheck disable=SC2086
+          for f in $(git diff --name-only "$UPSTREAM_TAG" HEAD -- . $TOOLING_PATHSPEC); do
+            if ! git cat-file -e "${UPSTREAM_TAG}:$f" 2>/dev/null; then
+              echo "new file $f"
+              continue
+            fi
+            echo "checking $f"
+            case "$f" in
+              tests/*) ;; # Debian's use-system-libs.patch edits every test file; checked below
+              *) git show "${UPSTREAM_TAG}:$f" | cmp - "$D/$f" ;;
+            esac
+          done
+
+      - name: Add the patch set after Debian's own patches
+        # Debian's use-system-libs.patch moves the gtest include in every
+        # test file, so a test hunk may need fuzz. Each patch is applied with
+        # fuzz allowed, then refreshed, so the source package carries patches
+        # that apply exactly. The next step proves the result is the branch.
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          cd "$D"
+          export QUILT_PATCHES=debian/patches QUILT_REFRESH_ARGS='-p ab --no-timestamps --no-index'
+          quilt push -a --fuzz=0
+          for p in "$GITHUB_WORKSPACE"/patches/ntrv-*.patch; do
+            name=$(basename "$p")
+            cp "$p" "debian/patches/$name"
+            echo "$name" >> debian/patches/series
+            quilt push --fuzz=2 "$name"
+            quilt refresh "$name"
+          done
+          cat debian/patches/series
+
+      - name: Confirm the patched tree carries exactly the branch's changes
+        run: |
+          set -euo pipefail
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          cd "$GITHUB_WORKSPACE/src"
+          strip_gtest() { grep -v -E '^#include [<"]gtest/gtest\.h[>"]$' | grep -v '^$'; }
+          # shellcheck disable=SC2086
+          for f in $(git diff --name-only "$UPSTREAM_TAG" HEAD -- . $TOOLING_PATHSPEC); do
+            echo "checking $f"
+            case "$f" in
+              tests/*) diff <(git show "HEAD:$f" | strip_gtest) <(strip_gtest < "$D/$f") ;;
+              *) git show "HEAD:$f" | cmp - "$D/$f" ;;
+            esac
+          done
+
+      - name: Set the local package version
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/src"
+          # shellcheck disable=SC2086
+          mapfile -t subjects < <(git log --reverse --format='%s' "$UPSTREAM_TAG"..HEAD -- . $TOOLING_PATHSPEC)
+          cd "$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)"
+          dch --newversion "${LOCAL_VERSION}" --distribution trixie-backports --force-distribution \
+            "Rebuild of ${BASE_VERSION} with the patch set on github.com/${GITHUB_REPOSITORY} (${GITHUB_SHA})."
+          for s in "${subjects[@]}"; do
+            dch --append "$s"
+          done
+          sed -n '1,12p' debian/changelog
+
+      - name: Install build dependencies from trixie only
+        # Debian's Build-Depends need nothing from backports. Preferring
+        # backports here linked the binaries against backported libraries
+        # (libcurl among them) that the deployed containers do not have.
+        run: |
+          set -euo pipefail
+          cd "$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)"
+          apt-get build-dep -y ./
+          if dpkg-query -W -f '${Package} ${Version}\n' | grep -F '~bpo'; then
+            echo "::error::build environment contains packages from trixie-backports"
+            exit 1
+          fi
+
+      - name: Build source and binary packages as an unprivileged user
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          chown -R builder: "$GITHUB_WORKSPACE/build"
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          su builder -c "cd '$D' && DEB_BUILD_OPTIONS='parallel=$(nproc)' dpkg-buildpackage -us -uc -rfakeroot" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Run the patch set's own tests explicitly
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/src"
+          # Every TEST_F or TEST the patch set adds, as Suite.Name.
+          mapfile -t tests < <(git diff "$UPSTREAM_TAG" HEAD -- tests \
+            | sed -n -E 's/^\+TEST(_F)?\(([A-Za-z0-9_]+), *([A-Za-z0-9_]+)\).*/\2.\3/p' | sort -u)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "::error::the patch set adds no tests"
+            exit 1
+          fi
+          filter=$(IFS=:; echo "${tests[*]}")
+          D=$(echo "$GITHUB_WORKSPACE"/build/transmission-*/)
+          T="$D/obj-x86_64-linux-gnu/tests/libtransmission/libtransmission-test"
+          test -x "$T"
+          # The fixtures put their sandbox in $TMPDIR, else the current
+          # directory, so run from the builder-owned build tree as ctest does.
+          su builder -c "cd '$D/obj-x86_64-linux-gnu' && TMPDIR=/tmp '$T' --gtest_filter='$filter'" \
+            2>&1 | tee "$GITHUB_WORKSPACE/new-tests.log"
+          for t in "${tests[@]}"; do
+            grep -F "[       OK ] $t " "$GITHUB_WORKSPACE/new-tests.log"
+          done
+          grep -F "[  PASSED  ] ${#tests[@]} test" "$GITHUB_WORKSPACE/new-tests.log"
+
+      - name: Compare runtime dependencies with the official backport
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/official"
+          cd "$GITHUB_WORKSPACE/official"
+          apt-get download "transmission-daemon=${BASE_VERSION}" "transmission-common=${BASE_VERSION}" "transmission-cli=${BASE_VERSION}"
+          for pkg in transmission-daemon transmission-common transmission-cli; do
+            ours=$(ls "$GITHUB_WORKSPACE"/build/${pkg}_*.deb | head -1)
+            echo "== $pkg"
+            echo "official: $(dpkg-deb -f "$GITHUB_WORKSPACE"/official/${pkg}_*.deb Depends)"
+            echo "ntrv:     $(dpkg-deb -f "$ours" Depends)"
+          done | tee "$GITHUB_WORKSPACE/depends.txt"
+
+      - name: Collect the packages
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd "$GITHUB_WORKSPACE/build"
+          cp -v ./*.deb ./*.changes ./*.buildinfo ./*.dsc ./*.debian.tar.* "$GITHUB_WORKSPACE/out/" || true
+          cp -v "$GITHUB_WORKSPACE"/build.log "$GITHUB_WORKSPACE"/new-tests.log "$GITHUB_WORKSPACE"/depends.txt "$GITHUB_WORKSPACE/out/" || true
+          cp -rv "$GITHUB_WORKSPACE/patches" "$GITHUB_WORKSPACE/out/" || true
+          cd "$GITHUB_WORKSPACE/out" && { sha256sum ./*.deb > SHA256SUMS || true; }
+          ls -la "$GITHUB_WORKSPACE/out"
+
+      - name: Upload the packages
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transmission-${{ env.LOCAL_VERSION }}-amd64
+          path: out/
+          if-no-files-found: error
+
+  install-test:
+    # Stands in for a deployed container: Debian 13 with trixie-backports
+    # enabled and the official backport installed, then upgraded to the ntrv
+    # packages without pulling any other package from backports.
+    name: Install over the official backport on Debian 13
+    needs: [plan, deb]
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      BASE_VERSION: ${{ needs.plan.outputs.base }}
+      LOCAL_VERSION: ${{ needs.plan.outputs.local }}
+    steps:
+      - name: Fetch the built packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: transmission-${{ env.LOCAL_VERSION }}-amd64
+          path: debs
+
+      - name: Install the official backport, as on the containers
+        run: |
+          set -euo pipefail
+          # No init system in the container: tell maintainer scripts not to
+          # start services, as is usual for package tests in containers.
+          printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+          chmod 0755 /usr/sbin/policy-rc.d
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            "transmission-daemon=${BASE_VERSION}" "transmission-common=${BASE_VERSION}" "transmission-cli=${BASE_VERSION}"
+          dpkg-query -W 'transmission*'
+
+      - name: Upgrade to the ntrv packages
+        run: |
+          set -euo pipefail
+          cd debs
+          apt-get install -y --no-install-recommends \
+            ./transmission-common_*.deb ./transmission-daemon_*.deb ./transmission-cli_*.deb \
+            2>&1 | tee ../install.log
+          dpkg-query -W 'transmission*' | tee ../installed.txt
+          for pkg in transmission-daemon transmission-common transmission-cli; do
+            test "$(dpkg-query -W -f '${Version}' "$pkg")" = "${LOCAL_VERSION}"
+          done
+          if grep -E '^Get:.*trixie-backports' ../install.log; then
+            echo "::error::the upgrade pulled packages from trixie-backports"
+            exit 1
+          fi
+          transmission-daemon --version 2>&1 | head -1
+
+  repro-9151:
+    # The "Procedure to reproduce" of transmission/transmission#9151, steps
+    # 1 to 8, on a clean daemon: once on the official backport, where step 6
+    # must fail and step 8 must pass, and once on the packages built above,
+    # where every step must pass.
+    name: Reproduce transmission#9151 on a clean daemon (${{ matrix.variant }})
+    needs: [plan, deb]
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [official, ntrv]
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      BASE_VERSION: ${{ needs.plan.outputs.base }}
+      LOCAL_VERSION: ${{ needs.plan.outputs.local }}
+    steps:
+      - name: Check out the reproduction scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          sparse-checkout: packaging/repro
+
+      - name: Fetch the built packages
+        if: matrix.variant == 'ntrv'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: transmission-${{ env.LOCAL_VERSION }}-amd64
+          path: debs
+
+      - name: Install the ${{ matrix.variant }} transmission-daemon
+        run: |
+          set -euo pipefail
+          printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+          chmod 0755 /usr/sbin/policy-rc.d
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
+          apt-get update
+          apt-get install -y --no-install-recommends python3
+          if [ "${{ matrix.variant }}" = official ]; then
+            apt-get install -y --no-install-recommends \
+              "transmission-daemon=${BASE_VERSION}" "transmission-common=${BASE_VERSION}" "transmission-cli=${BASE_VERSION}"
+          else
+            apt-get install -y --no-install-recommends \
+              ./debs/transmission-common_*.deb ./debs/transmission-daemon_*.deb ./debs/transmission-cli_*.deb
+          fi
+          dpkg-query -W 'transmission*'
+
+      - name: Run the procedure
+        run: bash src/packaging/repro/repro-9151.sh "${{ matrix.variant }}" "results-${{ matrix.variant }}.json"
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: repro-9151-${{ matrix.variant }}
+          path: results-${{ matrix.variant }}.json
+          if-no-files-found: warn
+
+  publish:
+    name: Publish the packages as a release
+    needs: [plan, deb, install-test, repro-9151]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/patches/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      LOCAL_VERSION: ${{ needs.plan.outputs.local }}
+      RELEASE: ${{ needs.plan.outputs.release }}
+      UPSTREAM_TAG: ${{ needs.plan.outputs.tag }}
+      BASE_VERSION: ${{ needs.plan.outputs.base }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Fetch the built packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: transmission-${{ env.LOCAL_VERSION }}-amd64
+          path: out
+
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE" >/dev/null 2>&1; then
+            echo "Release $RELEASE exists."
+            exit 0
+          fi
+          {
+            echo "Debian trixie-backports packages: \`${LOCAL_VERSION}\`."
+            echo
+            echo "Debian's \`${BASE_VERSION}\` (upstream ${UPSTREAM_TAG}) with this fork's patch set from \`${GITHUB_SHA}\` as quilt patches."
+            echo
+            echo "Install on a host that runs the official backport:"
+            echo
+            echo '```'
+            echo 'apt-get install ./transmission-common_*.deb ./transmission-daemon_*.deb ./transmission-cli_*.deb'
+            echo 'apt-mark hold transmission-common transmission-daemon transmission-cli'
+            echo '```'
+            echo
+            echo 'See FORK.md on patches/main for why the hold is needed.'
+          } > notes.md
+          gh release create "$RELEASE" --target "$GITHUB_SHA" \
+            --title "transmission ${LOCAL_VERSION}" --notes-file notes.md \
+            out/*.deb out/SHA256SUMS out/*.dsc out/*.debian.tar.* out/patches/*.patch
