@@ -1,0 +1,169 @@
+# Fork-only workflow. Keeps patches/main stacked on upstream main, and keeps
+# the fork's main identical to upstream main.
+#
+# Scheduled workflows run from the default branch only, so patches/main must
+# be the fork's default branch for the daily run to happen (see FORK.md).
+#
+# Pushing commits that touch .github/workflows/ needs a token with the
+# "workflows" permission. A rebase onto upstream main carries upstream's
+# workflow changes, and GITHUB_TOKEN cannot push those. Set a SYNC_TOKEN
+# secret (fine-grained PAT: Contents, Workflows and Actions read/write on
+# this repository). A push made with GITHUB_TOKEN also starts no workflows,
+# so the publish job starts the package build itself.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/transmission/transmission.git
+  PATCH_BRANCH: patches/main
+  # Every commit on this fork carries this identity, including the commits
+  # a rebase rewrites.
+  GIT_COMMITTER_NAME: netravnen
+  GIT_COMMITTER_EMAIL: 1938389+netravnen@users.noreply.github.com
+
+jobs:
+  rebase:
+    name: Stack the patch set on upstream main
+    runs-on: ubuntu-24.04
+    outputs:
+      old: ${{ steps.rebase.outputs.old }}
+      upstream: ${{ steps.rebase.outputs.upstream }}
+      changed: ${{ steps.rebase.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+
+      - name: Rebase onto upstream main
+        id: rebase
+        run: |
+          set -euo pipefail
+          git config user.name "$GIT_COMMITTER_NAME"
+          git config user.email "$GIT_COMMITTER_EMAIL"
+          git fetch --no-tags "$UPSTREAM_URL" '+refs/heads/main:refs/remotes/upstream/main'
+          up=$(git rev-parse refs/remotes/upstream/main)
+          old_base=$(git merge-base HEAD "$up")
+          old=$(git rev-parse HEAD)
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "upstream=$up" >> "$GITHUB_OUTPUT"
+          if [ "$old_base" = "$up" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Patch set is already on upstream main $up." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git rebase --committer-date-is-author-date --onto "$up" "$old_base"; then
+            {
+              echo "### Rebase onto upstream main $up failed"
+              echo '```'
+              git status --short
+              echo '```'
+              echo "Rebase $PATCH_BRANCH onto upstream main locally and force-push it (FORK.md)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            git rebase --abort
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Patch set on upstream main $up"
+            echo '```'
+            git log --oneline "$up"..HEAD
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The rewritten commits must keep the fork identity.
+          if git log --format='%an <%ae>%n%cn <%ce>' "$up"..HEAD \
+            | grep -v -x -F "$GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"; then
+            echo "::error::a patch commit has another author or committer identity"
+            exit 1
+          fi
+          git branch -f rebased HEAD
+          git bundle create patches.bundle rebased
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.rebase.outputs.changed == 'true'
+        with:
+          name: patches-bundle
+          path: patches.bundle
+          retention-days: 7
+
+  test:
+    name: Test the rebased patch set
+    needs: rebase
+    if: needs.rebase.outputs.changed == 'true'
+    uses: ./.github/workflows/patch-ci.yml
+    # patch-ci needs the Cloudflare Access service token for the submodules.
+    secrets: inherit
+    with:
+      bundle: patches-bundle
+
+  publish:
+    name: Push the rebased patch set
+    needs: [rebase, test]
+    if: needs.rebase.outputs.changed == 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: patches-bundle
+
+      - name: Push the rebased patch set
+        env:
+          OLD: ${{ needs.rebase.outputs.old }}
+        run: |
+          set -euo pipefail
+          git fetch patches.bundle rebased
+          git push --force-with-lease="refs/heads/$PATCH_BRANCH:$OLD" \
+            origin "$(git rev-parse FETCH_HEAD):refs/heads/$PATCH_BRANCH"
+
+      - name: Start the package build
+        # A push with SYNC_TOKEN starts it already. deb-ntrv.yml names a
+        # release by the patches replayed onto the release tag, so it skips a
+        # rebuild when only upstream main moved, and a second start is
+        # harmless.
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run deb-ntrv.yml --ref "$PATCH_BRANCH"
+
+  mirror-main:
+    name: Make main follow upstream main
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Move main to upstream main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags "$UPSTREAM_URL" main
+          up=$(git rev-parse FETCH_HEAD)
+          if [ "$(git rev-parse origin/main)" = "$up" ]; then
+            echo "main is already at upstream $up."
+            exit 0
+          fi
+          git push --force-with-lease=refs/heads/main origin "$up:refs/heads/main"
