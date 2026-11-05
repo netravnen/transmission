@@ -1,6 +1,6 @@
 [submodule "third-party/dht"]
 	path = third-party/dht
-	url = https://github.com/transmission/dht.git
+	url = https://code.netravnen.org/transmission/dht.git
 	branch = post-0.27-transmission
 [submodule "third-party/libb64"]
 	path = third-party/libb64
@@ -15,7 +15,7 @@
 	url = https://github.com/transmission/libnatpmp.git
 [submodule "third-party/libutp"]
 	path = third-party/libutp
-	url = https://github.com/transmission/libutp.git
+	url = https://code.netravnen.org/transmission/libutp.git
 	branch = post-3.4-transmission
 [submodule "third-party/miniupnp"]
 	path = third-party/miniupnp
