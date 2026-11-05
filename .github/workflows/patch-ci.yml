@@ -1,0 +1,148 @@
+# Fork-only workflow. Builds the patch set and runs libtransmission's tests
+# with sanitizers, as upstream's sanitizer-tests-ubuntu job does, then checks
+# that every test the patch set adds ran and passed.
+#
+# upstream-sync.yml calls it on a rebased series before pushing it; it then
+# passes the series as a git bundle artifact instead of a ref.
+
+name: Patch set CI
+
+on:
+  push:
+    branches: ['patches/**']
+  pull_request:
+    branches: ['patches/**']
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      bundle:
+        description: Name of an artifact holding patches.bundle with a branch named rebased.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-ci-${{ github.ref }}-${{ inputs.bundle }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_URL: https://github.com/transmission/transmission.git
+
+jobs:
+  test:
+    name: Build and test with sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Get dependencies
+        run: |
+          set -ex
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates clang cmake gettext libcurl4-openssl-dev libdeflate-dev \
+            libevent-dev libfmt-dev libminiupnpc-dev libnatpmp-dev libpsl-dev libssl-dev ninja-build
+
+      - name: Let git reach the forge through Cloudflare Access
+        # The dht and libutp submodules live on the forge, which is behind
+        # Cloudflare Access. A service token gets the runner past it.
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CF_ACCESS_CLIENT_ID" ] || [ -z "$CF_ACCESS_CLIENT_SECRET" ]; then
+            echo "::error::the CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET secrets are not set (FORK.md, Setup)"
+            exit 1
+          fi
+          git config --global --add http.https://code.netravnen.org/.extraHeader "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
+          git config --global --add http.https://code.netravnen.org/.extraHeader "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+
+      - name: Check out the patch set
+        if: inputs.bundle == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: src
+
+      - name: Fetch the submodules
+        if: inputs.bundle == ''
+        run: git -C src submodule update --init --recursive
+
+      - name: Download the rebased patch set
+        if: inputs.bundle != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.bundle }}
+
+      - name: Check out the rebased patch set
+        if: inputs.bundle != ''
+        run: |
+          set -euo pipefail
+          git clone --branch rebased patches.bundle src
+          git -C src submodule update --init --recursive
+
+      - name: Find the upstream base and the added tests
+        id: info
+        working-directory: src
+        run: |
+          set -euo pipefail
+          git fetch --no-tags "$UPSTREAM_URL" '+refs/heads/main:refs/remotes/upstream/main'
+          base=$(git merge-base HEAD refs/remotes/upstream/main)
+          tests=$(git diff "$base" HEAD -- tests \
+            | sed -n -E 's/^\+TEST(_F)?\(([A-Za-z0-9_]+), *([A-Za-z0-9_]+)\).*/\2.\3/p' | sort -u | paste -sd' ')
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Patch set on upstream main at $base"
+            echo '```'
+            git log --oneline "$base"..HEAD
+            echo '```'
+            echo "Added tests: $tests"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure
+        run: |
+          cmake \
+            -S src \
+            -B obj \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER='clang++' \
+            -DCMAKE_CXX_FLAGS='-gdwarf-4 -fno-omit-frame-pointer -fsanitize=address,leak,undefined' \
+            -DCMAKE_C_COMPILER='clang' \
+            -DCMAKE_C_FLAGS='-gdwarf-4 -fno-omit-frame-pointer -fsanitize=address,leak,undefined' \
+            -DCMAKE_INSTALL_PREFIX=pfx \
+            -DENABLE_CLI=OFF \
+            -DENABLE_DAEMON=OFF \
+            -DENABLE_GTK=OFF \
+            -DENABLE_MAC=OFF \
+            -DENABLE_QT=OFF \
+            -DENABLE_TESTS=ON \
+            -DENABLE_UTILS=ON \
+            -DREBUILD_WEB=OFF \
+            -DRUN_CLANG_TIDY=OFF
+
+      - name: Make
+        run: cmake --build obj --config Debug --target libtransmission-app-test libtransmission-test transmission-show
+
+      - name: Test with sanitizers
+        run: cmake -E chdir obj ctest -j "$(nproc)" --build-config Debug --output-on-failure
+
+      - name: Run the added tests by name
+        env:
+          TESTS: ${{ steps.info.outputs.tests }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TESTS" ]; then
+            echo "::error::the patch set adds no tests"
+            exit 1
+          fi
+          read -r -a tests <<< "$TESTS"
+          filter=$(IFS=:; echo "${tests[*]}")
+          obj/tests/libtransmission/libtransmission-test --gtest_filter="$filter" | tee added-tests.log
+          for t in "${tests[@]}"; do
+            grep -F "[       OK ] $t " added-tests.log
+          done
+          grep -F "[  PASSED  ] ${#tests[@]} test" added-tests.log
